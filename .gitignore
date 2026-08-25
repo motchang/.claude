@@ -1,0 +1,27 @@
+# deny-by-default。* で全部落としてから、追跡するものだけを名指しで戻す。
+#
+# ~/.claude は設定ファイルと作業状態が同じディレクトリに混在する。projects/ は
+# ディレクトリ名そのものが作業したリポジトリの絶対パスになっており、
+# history.jsonl・sessions/・file-history/・paste-cache/ には会話とファイル内容が
+# そのまま残る。除外を列挙する方式ではいつか漏れるので、許可を列挙する方式に
+# してある。漏れたときの結果が非対称なので、面倒な側に倒す。
+#
+# 新しく追跡したいものが増えたら、ここに ! 行を足すこと。足すまでは git add が
+# 通らない。ディレクトリを丸ごと許可する（!/hooks/** のような書き方）のは避ける。
+# ツールが自動生成したファイルや、非公開リポへの symlink まで巻き込むため。
+*
+
+!.gitignore
+!/README.md
+!/settings.json
+
+# hooks/ は個別に許可する。同じディレクトリに、herdr が生成する
+# herdr-agent-state.sh と、非公開リポへ symlink している no-isolation-repos が
+# 同居しており、どちらも追跡してはいけない。
+!/hooks/
+!/hooks/enforce-agent-worktree.sh
+
+# skills/ も個別に許可する。プラグインやベンダーが配布するスキルが同居している。
+!/skills/
+!/skills/mdpreview/
+!/skills/mdpreview/**
