@@ -1,32 +1,8 @@
 # ~/.claude
 
-User-level Claude Code configuration - settings, hooks, and the skills that apply
-to every project. The repository lives under `~/src` like any other, and `~/.claude`
-is a symlink to it, the same arrangement as `~/.emacs.d`.
-
-	git clone ssh://git@github.com/motchang/.claude ~/src/github.com/motchang/.claude
-	ln -s ~/src/github.com/motchang/.claude ~/.claude
-
-Do that before the first `claude` run on a fresh machine, while `~/.claude` does
-not exist yet. On a machine that has already run Claude Code, move what is there
-into place and link it back instead - the same filesystem, so the move is instant
-and open file handles follow it:
-
-	command mv ~/.claude ~/src/github.com/motchang/.claude
-	ln -s ~/src/github.com/motchang/.claude ~/.claude
-	cd ~/.claude
-	git init -b main
-	git remote add origin ssh://git@github.com/motchang/.claude
-	git fetch origin
-	git reset origin/main
-
-`git reset` rather than `checkout`, so what is already on disk is left where it is:
-the tracked files are adopted, not written over. Anything that differs then shows up
-as a modification to look at.
-
-The remote is SSH on purpose. Over HTTPS git picks the credential helper for the
-active `gh` account, which on a work machine is not the one that owns this
-repository.
+User-level Claude Code configuration - settings, hooks, skills, and the instructions
+that apply to every project. The repository lives under `~/src` like any other, and
+`~/.claude` is a symlink to it, the same arrangement as `~/.emacs.d`.
 
 # a warning about git clean
 
@@ -34,6 +10,11 @@ Claude Code keeps its entire working state in this directory - `projects/`,
 `sessions/`, `history.jsonl`, `plugins/`, several hundred megabytes of it - and all of
 it is ignored rather than tracked. `git clean -xdf` here deletes every session
 transcript and every installed plugin. The transcripts cannot be regenerated.
+
+The same asymmetry applies to putting this repository back on a machine that has
+already run Claude Code: adopt what is on disk with `git reset origin/main`, never
+`git checkout`. Reset leaves the working state alone and lets the differences show up
+as modifications to look at. Checkout writes over it.
 
 # what is tracked
 
@@ -63,6 +44,33 @@ Left untracked on purpose:
 - `plugins/`, `projects/`, `sessions/`, `history.jsonl`, and the rest of the runtime
   state.
 
+# who does the writing
+
+Changes to a repository are made by a subagent working in a linked git worktree, not
+by the main thread and not in the main checkout. `hooks/enforce-agent-worktree.sh`
+enforces it as a PreToolUse hook: `Edit`, `Write` and `NotebookEdit` always, and the
+Bash commands that actually change files in the repository.
+
+The filter splits a command on shell separators, reads the word in command position,
+and resolves redirect targets and path arguments against the repository, so
+`grep -rn npm .` is a search and a redirect into `/tmp` is not a repository change. It
+reads the subcommand for git, the node package managers, cargo, go and make:
+`npm install` is guarded, `npm ls` is not. Reading, searching, building and testing
+stay on the main thread, which is where their output is interpreted.
+
+A repository opts out through `hooks/no-isolation-repos` or a `.claude/no-isolation`
+file of its own. This one is on that list. A guard that routed every edit of its own
+configuration through a worktree would be tiresome to maintain and would make a
+mistake in the guard itself hard to undo.
+
+`CLAUDE.md` carries the part no hook can. Review is read-only, so no deny ever fires
+for it, and wanting the reviewing agent to be a different one from the agent that
+wrote the change is a policy rather than a mechanism. It also states that delegation
+needs no per-session permission, because the harness may inject an instruction not to
+use the Agent tool unless the user asked for it - the sentence carries its own
+exception, and a standing instruction here satisfies it once instead of by hand every
+session. That file is user-level: it applies to every project, not only this one.
+
 # settings.json
 
 Hook commands are written `bash "$HOME/.claude/hooks/..."`, never as absolute paths.
@@ -84,7 +92,7 @@ here can come back, and the refusal is what tells you.
 This repository shares one installation of the commit and push guard with the public
 dotfiles repository. The hooks live outside any working tree precisely so that several
 repositories can point at the same copy. Install it from the dotfiles repository
-first, then arm this one:
+first, then arm this one - until this runs, the guard is simply off:
 
 	git config core.hooksPath "$HOME/.config/dotfiles-guard/hooks"
 
