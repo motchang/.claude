@@ -197,12 +197,20 @@ top=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)
 [ -n "$top" ] && [ -f "$top/.claude/no-isolation" ] && exit 0
 
 # Global opt-out list, kept outside any repo so it needs no in-repo marker file.
+# A line may carry an expiry — "<path> until YYYY-MM-DD" — and stops matching
+# after that day, so a temporary exemption reverts to guarded on its own.
 exempt=~/.claude/hooks/no-isolation-repos
 if [ -n "$top" ] && [ -f "$exempt" ]; then
   common_root=$(git -C "$dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
   main_top=${common_root%/.git}
+  today=$(date +%F)
   while IFS= read -r line; do
     case "$line" in ''|\#*) continue;; esac
+    case "$line" in
+      *' until '*)
+        [[ $today > ${line##* until } ]] && continue
+        line=${line%% until *};;
+    esac
     line=${line%/}
     eval "line=$line" 2>/dev/null
     [ "$line" = "$top" ] || [ "$line" = "$main_top" ] && exit 0
