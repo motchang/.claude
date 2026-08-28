@@ -98,7 +98,10 @@ sub_word() {
 
 # ------------------------------------------------------------- mutation tests
 
-# Redirect targets that are real files inside the repository.
+# Redirect targets that are real files inside the repository. Quoted spans are
+# dropped first: a '>' inside quotes (a grep pattern, an echoed string) is data,
+# not a redirect. The cost is missing a redirect onto a quoted filename, and a
+# guard that prefers missing over misfiring can pay it.
 writes_into_repo() {
   local t
   while IFS= read -r t; do
@@ -106,6 +109,7 @@ writes_into_repo() {
     case $t in /dev/*) continue;; esac
     inside_repo "$t" && return 0
   done < <(printf '%s' "$1" \
+    | sed -E -e "s/'[^']*'//g" -e 's/"[^"]*"//g' \
     | sed -E 's/[0-9]*>>?&[0-9-]+//g' \
     | grep -oE '[0-9]*>>?[|]?[[:space:]]*[^[:space:];&|)]+' \
     | sed -E 's/^[0-9]*>>?[|]?[[:space:]]*//')
