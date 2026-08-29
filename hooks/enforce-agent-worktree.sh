@@ -224,14 +224,19 @@ if [ "$tool" = "Bash" ]; then
   mutates_repo "$cmd" || exit 0
 fi
 
+# Both the Bash filter and the path resolution misfire in known ways. The deny
+# text tells the caller how to sidestep them, so a false positive costs one
+# reworded retry instead of a stalled task.
+hint="※読み取りのつもりで拒否された場合は誤検知の可能性が高い（コマンド文字列中の > < | やバッククォート、変数展開したパスをリダイレクトと誤認する）。ファイルの書き込みは Bash ではなく Write/Edit ツールでリテラルな絶対パスに行い、新規ディレクトリ配下へ書く前に mkdir -p で親を作っておくと通る。"
+
 if [ -z "$agent" ]; then
-  deny "リポジトリ内のファイル変更はメインスレッドから直接実行できません。Agent ツールでサブエージェントに委譲してください（例: Agent(subagent_type:\"general-purpose\", isolation:\"worktree\")）。読み取り・検索・ビルド・テストはメインスレッドで可。どうしても直接やる必要があるなら、ユーザーに CLAUDE_ENFORCE_OFF=1 での起動を依頼してください。"
+  deny "リポジトリ内のファイル変更はメインスレッドから直接実行できません。Agent ツールでサブエージェントに委譲してください（例: Agent(subagent_type:\"general-purpose\", isolation:\"worktree\")）。読み取り・検索・ビルド・テストはメインスレッドで可。どうしても直接やる必要があるなら、ユーザーに CLAUDE_ENFORCE_OFF=1 での起動を依頼してください。$hint"
 fi
 
 gd=$(git -C "$dir" rev-parse --absolute-git-dir 2>/dev/null)
 common=$(git -C "$dir" rev-parse --git-common-dir 2>/dev/null)
 case "$common" in /*) ;; *) common=$(cd "$dir" && cd "$common" 2>/dev/null && pwd);; esac
 [ -n "$gd" ] && [ "$gd" = "$common" ] && \
-  deny "メインチェックアウト ($top) は変更できません。git worktree 内で作業してください。Agent は isolation:\"worktree\" で起動する、またはセッション側で EnterWorktree / claude --worktree を使ってください。"
+  deny "メインチェックアウト ($top) は変更できません。git worktree 内で作業してください。Agent は isolation:\"worktree\" で起動する、またはセッション側で EnterWorktree / claude --worktree を使ってください。$hint"
 
 exit 0
