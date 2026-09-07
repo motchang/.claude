@@ -83,5 +83,6 @@
       "**Org-specific CLIs**: None configured (herdr, herdr-browser, mdpreview, hunk, gibo, ghostty are project-local tooling used routinely in this repo, not org infra)",
       "routine under ~/src/github.com/motchang/dotfiles/ prefix qualifier applies to herdr, herdr-browser, mdpreview, hunk, gibo commands"
     ]
-  }
+  },
+  "feedbackDrafts": "off"
 }
