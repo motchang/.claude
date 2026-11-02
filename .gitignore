@@ -22,6 +22,12 @@
 !/hooks/
 !/hooks/enforce-agent-worktree.sh
 !/hooks/enforce-agent-worktree.test.sh
+!/hooks/remind-grilling.sh
+!/hooks/remind-grilling.test.sh
+
+# docs/ は CLAUDE.md から必要なときだけ Read させる文書を置く。個別に許可する。
+!/docs/
+!/docs/grilling-rules.md
 
 # skills/ も個別に許可する。プラグインやベンダーが配布するスキルが同居している。
 !/skills/

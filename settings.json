@@ -30,6 +30,17 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/remind-grilling.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   },
   "worktree": {
