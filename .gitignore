@@ -21,6 +21,7 @@
 # 同居しており、どちらも追跡してはいけない。
 !/hooks/
 !/hooks/enforce-agent-worktree.sh
+!/hooks/enforce-agent-worktree.test.sh
 
 # skills/ も個別に許可する。プラグインやベンダーが配布するスキルが同居している。
 !/skills/
