@@ -4,7 +4,7 @@
       "Bash(herdr-browser:*)"
     ]
   },
-  "model": "opus[1m]",
+  "model": "fable",
   "hooks": {
     "SessionStart": [
       {
@@ -39,11 +39,16 @@
     ],
     "baseRef": "head"
   },
+  "statusLine": {
+    "type": "command",
+    "command": "python3 ~/.claude/runcat-statusline.py"
+  },
   "enabledPlugins": {
     "example-skills@anthropic-agent-skills": true,
     "document-skills@anthropic-agent-skills": true,
     "gopls-lsp@claude-plugins-official": true,
-    "ruby-lsp@claude-plugins-official": true
+    "ruby-lsp@claude-plugins-official": true,
+    "typesafe@typesafe-ai": true
   },
   "extraKnownMarketplaces": {
     "anthropic-agent-skills": {
@@ -51,11 +56,31 @@
         "source": "github",
         "repo": "anthropics/skills"
       }
+    },
+    "typesafe-ai": {
+      "source": {
+        "source": "github",
+        "repo": "typesafe-ai/skills"
+      }
     }
   },
+  "feedbackDrafts": "off",
   "effortLevel": "xhigh",
+  "modelSettings": {
+    "claude-opus-5": {
+      "effortLevel": "xhigh"
+    },
+    "claude-fable-5-1": {},
+    "claude-opus-5-5": {
+      "autoCompactWindow": "auto"
+    },
+    "claude-opus-4-8": {}
+  },
+  "advisorModel": "fable",
   "tui": "fullscreen",
+  "skipWorkflowUsageWarning": true,
   "theme": "dark-ansi",
+  "switchModelsOnFlag": false,
   "autoMode": {
     "environment": [
       "### Org-wide",
@@ -83,6 +108,5 @@
       "**Org-specific CLIs**: None configured (herdr, herdr-browser, mdpreview, hunk, gibo, ghostty are project-local tooling used routinely in this repo, not org infra)",
       "routine under ~/src/github.com/motchang/dotfiles/ prefix qualifier applies to herdr, herdr-browser, mdpreview, hunk, gibo commands"
     ]
-  },
-  "feedbackDrafts": "off"
+  }
 }
