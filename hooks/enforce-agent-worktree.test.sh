@@ -235,8 +235,8 @@ check "r1c cwd=M make --dry-run (no agent)"  deny "$R1" "$(bash_json "" "$M" "ma
 check "r1d Write cwd=M /tmp/new/x (no agent)" deny "$R1" "$(write_json "" "$M" "/tmp/nonexistent-$$/x")"
 check "r1e cwd=M rm /tmp/f (no agent)"       allow ""  "$(bash_json "" "$M" "rm /tmp/f")"
 
-# Over 200 segments (or 16384 chars) a command that mutates anything at all is
-# denied as too long to judge; one that does not is allowed.
+# Over 16384 chars a command that mutates anything at all is denied as too long
+# to judge; one that does not is allowed. (These 120-pair chains pass 16384.)
 TL=長すぎて
 long=""; for i in $(seq 1 120); do long="$long git -C $W_SIB add f$i && echo x > $W_SIB/g$i &&"; done
 check "l1 cwd=M 241 segments, all in W"      deny "$TL" "$(bash_json a1 "$M" "$long true")"
@@ -248,7 +248,7 @@ check "l4 cwd=M 250 read-only segments"      allow ""  "$(bash_json a1 "$M" "$ls
 # Should-fix 1: padding past the cap must not reopen W -> M.
 pad=$(for i in $(seq 1 200); do printf 'true; '; done)
 xs=$(head -c 16400 /dev/zero | tr '\0' x)
-check "c1 cwd=W 200x true; cd ../main && commit" deny "$TL" "$(bash_json a1 "$W_SIB" "$pad cd ../main && git commit -m x")"
+check "c1 cwd=W 200x true; cd ../main && commit" deny "$R2" "$(bash_json a1 "$W_SIB" "$pad cd ../main && git commit -m x")"
 check "c2 cwd=W cd ../main && commit # 16K"  deny "$TL" "$(bash_json a1 "$W_SIB" "cd ../main && git commit -m x # $xs")"
 check "c3 cwd=W git -C ../main commit # 16K" deny "$TL" "$(bash_json a1 "$W_SIB" "git -C ../main commit -m x # $xs")"
 check "c4 cwd=W git -C M commit # 16K"       deny "$TL" "$(bash_json a1 "$W_SIB" "git -C $M commit -m x # $xs")"
@@ -273,6 +273,78 @@ check "q1 cwd=W git -C \"W/x y/../../main\" commit" deny "$R2" "$(bash_json a1 "
 check "q2 cwd=M cd W && echo > \"../main/a\""  deny "$R2" "$(bash_json a1 "$M" "cd $W_SIB && echo x > \"../main/a\"")"
 check "q3 cwd=W git -C \"W/x y\" commit"      allow ""  "$(bash_json a1 "$W_SIB" "git -C \"$W_SIB/x y\" commit -m x")"
 check "q4 cwd=W echo \"a > b\" && git status" allow ""  "$(bash_json a1 "$W_SIB" "echo \"a > b\" && git status")"
+
+# Round 3. W is the sibling worktree, every case runs as an agent unless noted.
+W=$W_SIB
+U=確認できません
+SELF=ユーザーだけが編集
+# M2: a redirect target ends at the operator after it.
+check "e1 echo \$y >/dev/null; rm -rf M/a"        deny "$R2" "$(bash_json a1 "$W" "echo \$y >/dev/null; rm -rf $M/a")"
+check "e2 cd M >/dev/null; git commit"           deny "$R2" "$(bash_json a1 "$W" "cd $M >/dev/null; git commit -m x")"
+check "e3 echo \$HOME >/dev/null; git -C M commit" deny "$R2" "$(bash_json a1 "$W" "echo \$HOME >/dev/null; git -C $M commit -m x")"
+check "e4 echo \$y </dev/null|rm -rf M/a"         deny "$R2" "$(bash_json a1 "$W" "echo \$y </dev/null|rm -rf $M/a")"
+check "e5 echo \$y >/dev/null&&rm -rf M/a"        deny "$R2" "$(bash_json a1 "$W" "echo \$y >/dev/null&&rm -rf $M/a")"
+# M4: GIT_* set by export/declare/env, or read from config the hook cannot see.
+check "g1 export GIT_DIR=M/.git && commit"       deny "$R2" "$(bash_json a1 "$W" "export GIT_DIR=$M/.git && git commit -m x")"
+check "g2 export GIT_WORK_TREE=M; checkout"      deny "$R2" "$(bash_json a1 "$W" "export GIT_WORK_TREE=$M; git checkout -- .")"
+check "g3 declare -x GIT_DIR=M/.git; commit"     deny "$R2" "$(bash_json a1 "$W" "declare -x GIT_DIR=$M/.git; git commit -m x")"
+check "g4 env GIT_DIR=M/.git git commit"         deny "$R2" "$(bash_json a1 "$W" "env GIT_DIR=$M/.git git commit -m x")"
+check "g5 env -u X GIT_WORK_TREE=M checkout"     deny "$R2" "$(bash_json a1 "$W" "env -u X GIT_WORK_TREE=$M git checkout -- .")"
+check "g6 git --config-env=core.worktree=X"      deny "$U"  "$(bash_json a1 "$W" "X=$M git --config-env=core.worktree=X checkout -- .")"
+check "g7 GIT_CONFIG_PARAMETERS core.worktree"   deny "$U"  "$(bash_json a1 "$W" "GIT_CONFIG_PARAMETERS=\"'core.worktree'='$M'\" git checkout -- .")"
+# M5: file_path is joined with the cwd and normalized before its parent is looked up.
+check "w3 Write W/new/../../main/a"              deny "$R2" "$(write_json a1 "$W" "$W/new/../../main/a")"
+check "w4 Write ../main/a (relative)"            deny "$R2" "$(write_json a1 "$W" "../main/a")"
+check "w5 Write W/new/dir/f"                     allow ""  "$(write_json a1 "$W" "$W/new/dir/f")"
+check "w6 Write sub/f (relative)"                allow ""  "$(write_json a1 "$W" "sub/f")"
+# A verb from a variable or $(...), wrappers, attached option values.
+check "v1 cmd=rm; \$cmd -rf M/a"                  deny "$R2" "$(bash_json a1 "$W" "cmd=rm; \$cmd -rf $M/a")"
+check "v2 \$(echo rm) -rf M/a"                    deny "$R2" "$(bash_json a1 "$W" "\$(echo rm) -rf $M/a")"
+check "v8 cwd=M cmd=rm; \$cmd -rf a"             deny "$R2" "$(bash_json a1 "$M" "cmd=rm; \$cmd -rf a")"
+check "g8 GIT_CONFIG_NOSYSTEM=1 git commit"      allow ""  "$(bash_json a1 "$W" "GIT_CONFIG_NOSYSTEM=1 git commit -m x")"
+check "so6 Write W/.claude/x/../no-isolation"    deny "$SELF" "$(write_json a1 "$W" "$W/.claude/x/../no-isolation")"
+for wr in "arch -arm64" "ionice -c3" "flock /tmp/l" setsid "script -q /dev/null" "gtimeout 5"; do
+  check "v3 $wr rm -rf M/a"                      deny "$R2" "$(bash_json a1 "$W" "$wr rm -rf $M/a")"
+done
+check "v4 npx rimraf M/a"                        deny "$R2" "$(bash_json a1 "$W" "npx rimraf $M/a")"
+check "v5 curl -oM/a"                            deny "$R2" "$(bash_json a1 "$W" "curl -o$M/a http://x")"
+check "v6 wget -OM/a"                            deny "$R2" "$(bash_json a1 "$W" "wget -O$M/a http://x")"
+check "v7 npx tsc (not a writer)"                allow ""  "$(bash_json a1 "$W" "npx tsc --noEmit")"
+# git subcommands that write where an argument points.
+check "x1 git clone . M/y"                       deny "$R2" "$(bash_json a1 "$W" "git clone . $M/y")"
+check "x2 git init M/x"                          deny "$R2" "$(bash_json a1 "$W" "git init $M/x")"
+check "x3 git archive -o M/a.tar"                deny "$R2" "$(bash_json a1 "$W" "git archive -o $M/a.tar HEAD")"
+check "x4 git format-patch -o M"                 deny "$R2" "$(bash_json a1 "$W" "git format-patch -o $M HEAD~1")"
+check "x5 git diff --output=M/a"                 deny "$R2" "$(bash_json a1 "$W" "git diff --output=$M/a")"
+check "x6 git diff --output=/tmp/a"              allow ""  "$(bash_json a1 "$W" "git diff --output=/tmp/a")"
+check "x7 git -C M log --oneline"                allow ""  "$(bash_json a1 "$W" "git -C $M log --oneline")"
+# Self opt-out: the markers are the user's, whoever asks and from wherever.
+check "so1 touch .claude/no-isolation"           deny "$SELF" "$(bash_json a1 "$W" "mkdir -p .claude && touch .claude/no-isolation")"
+check "so2 Write W/.claude/no-isolation"         deny "$SELF" "$(write_json a1 "$W" "$W/.claude/no-isolation")"
+check "so3 echo >> no-isolation-repos (no agent)" deny "$SELF" "$(bash_json "" /tmp "echo $W >> ~/.claude/hooks/no-isolation-repos")"
+check "so4 Write no-isolation-repos (no agent)"  deny "$SELF" "$(write_json "" /tmp "$HOME/.claude/hooks/no-isolation-repos")"
+check "so5 cat no-isolation-repos"               allow ""  "$(bash_json a1 "$W" "cat ~/.claude/hooks/no-isolation-repos")"
+# Known limits, kept on purpose: the opt-out is judged on the cwd only, so from an
+# opted-out repo a write into M passes; a linked worktree nested in M is not main;
+# git update-ref / config core.hooksPath / config --worktree core.worktree run from W
+# are not judged; a symlink made beforehand (ln -s .. l && rm -rf l/main) and writers
+# not listed (gzip, sort -o, ditto, prettier --write, python3 -c) are not followed.
+check "k1 cwd=opted-out repo rm -rf M/a"         allow ""  "$(bash_json a1 "$tmp/opt-future" "rm -rf $M/a")"
+# Without jq the hook still denies, by printf.
+mkdir -p "$tmp/nojq"
+for b in cat git sed tr grep sort dirname date wc head; do ln -s "$(command -v $b)" "$tmp/nojq/$b"; done
+out=$(bash_json a1 "$W" "ls" | env PATH="$tmp/nojq" "$BASH" "$hook" 2>/dev/null)
+case $out in *'"permissionDecision":"deny"'*) pass=$((pass+1)); echo "PASS  j1 no jq: deny";;
+  *) fail=$((fail+1)); echo "FAIL  j1 no jq: deny (got ${out:0:80})";; esac
+# Input the hook cannot read is refused, not waved through.
+out=$(bash_json a1 "$W" "ls" | env -u HOME "$BASH" "$hook" 2>/dev/null)
+case $out in *'"permissionDecision":"deny"'*HOME*) pass=$((pass+1)); echo "PASS  j2 no HOME: deny";;
+  *) fail=$((fail+1)); echo "FAIL  j2 no HOME: deny (got ${out:0:80})";; esac
+for j in '{}' 'not json' '{"tool_name":"Bash","cwd":"/tmp","tool_input":{"command":["rm","x"]}}'; do
+  check "j3 malformed: $j"                       deny ""   "$j"
+done
+mkdir -p "$tmp/out"
+check "w7 Write no agent cwd=outside out/new/../../main/a" deny "$R1" "$(write_json "" "$tmp/out" "$tmp/out/new/../../main/a")"
 
 # Speed. A hook that hits Claude Code's timeout (10s) does not deny, so every
 # input must be judged well inside it. timed <label> <allow|deny|either> <json>
@@ -309,6 +381,24 @@ timed "p1 cd W; 199 x rm (64-dir cap)" either "$(bash_json a1 "$M" "$c")"
 c=""; for i in $(seq 1 199); do c="$c rm /tmp/x$i;"; done
 timed "p2 cwd=W 199 x rm /tmp" allow "$(bash_json a1 "$W_SIB" "$c")"
 timed "p3 cwd=M one 16000-char word + commit" deny "$(bash_json a1 "$M" "git commit -m $(head -c 16000 /dev/zero | tr '\0' a)")"
+# Round 3, M1: long but ordinary work in W is not refused for its separators.
+lines() { for i in $(seq 1 $1); do printf 'line %d: some text | with pipe; and (parens) & stuff\n' $i; done; }
+body=$(printf '## Summary\n\n| file | change | why |\n|---|---|---|\n'; for i in $(seq 1 25); do printf '| f%d.ts | edit (x) | y; z |\n' $i; done)
+timed "a1 gh pr create --body heredoc, 25-row table" allow "$(bash_json a1 "$W" "gh pr create --title t --body \"\$(cat <<'EOF'$NL$body${NL}EOF$NL)\"")"
+timed "a2 cat > notes.txt, 120-line heredoc" allow "$(bash_json a1 "$W" "cat > notes.txt <<'EOF'$NL$(lines 120)${NL}EOF")"
+timed "a3 git commit -F -, 210-line heredoc" allow "$(bash_json a1 "$W" "git commit -F - <<'EOF'$NL$(lines 210)${NL}EOF")"
+timed "a4 git commit -m with 60 lines, pipes" allow "$(bash_json a1 "$W" "git commit -m '$(lines 60)'")"
+c="cd $W"; for i in $(seq 1 99); do c="$c && rm a$i"; done
+timed "a5 cd W && rm a1 && ... rm a99" allow "$(bash_json a1 "$W" "$c")"
+timed "a6 16000 open parens" either "$(bash_json a1 "$W" "$(head -c 16000 /dev/zero | tr '\0' '(')")"
+c=""; for i in $(seq 1 3000); do c="${c}true;"; done
+timed "a7 x=\$y; 3000 x true; rm M/a" deny "$(bash_json a1 "$W" "x=\$y; $c rm $M/a")"
+# M3: quotes and backslashes do not hide a writer, under the cap or over it.
+for c in "r''m -rf $M" "g''it -C $M commit -m x" "r\\m -rf $M"; do
+  base="$c #"; ys=$(head -c $((16384-${#base})) /dev/zero | tr '\0' y)
+  timed "m3 16384: $c" deny "$(bash_json a1 "$W" "$base$ys")"
+  timed "m3 16385: $c" deny "$(bash_json a1 "$W" "${base}y$ys")"
+done
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" = 0 ]
