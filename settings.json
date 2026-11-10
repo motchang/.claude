@@ -4,7 +4,7 @@
       "Bash(herdr-browser:*)"
     ]
   },
-  "model": "fable",
+  "model": "opus",
   "hooks": {
     "SessionStart": [
       {
