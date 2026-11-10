@@ -45,9 +45,11 @@ SELF="オプトアウトの指定（.claude/no-isolation と ~/.claude/hooks/no-
 
 # mut_ev <cmd>: quotes and backslashes dropped, any redirect (bar /dev/null and fd dups)
 # or a writing word remains. The coarse reading for what is not parsed word by word.
+# grep reads to the end (no -q): under pipefail an early exit kills sed with SIGPIPE
+# (141) and turns a match into "no writer".
 mut_ev() {
   printf '%s' "$1" | tr -d "\\\\\"'" | sed -E -e 's/[0-9]*[<>]&[0-9-]+//g' -e 's/[0-9&]*>>?[[:space:]]*\/dev\/(null|stdout|stderr|tty)//g' \
-    | grep -Eq '[<>]|(^|[^[:alnum:]_.-])(rm|rmdir|mv|cp|rsync|touch|mkdir|ln|unlink|chmod|chown|chgrp|tee|dd|patch|truncate|shred|install|sed|perl|ruby|gofmt|tar|unzip|curl|wget|find|git|npm|pnpm|yarn|bun|npx|rimraf|cargo|go|make|gmake|eval|exec|source|xargs|sh|bash|zsh|sudo)([^[:alnum:]_.-]|$)'
+    | grep -E '[<>]|(^|[^[:alnum:]_.-])(rm|rmdir|mv|cp|rsync|touch|mkdir|ln|unlink|chmod|chown|chgrp|tee|dd|patch|truncate|shred|install|sed|perl|ruby|gofmt|tar|unzip|curl|wget|find|git|npm|pnpm|yarn|bun|npx|rimraf|cargo|go|make|gmake|eval|exec|source|xargs|sh|bash|zsh|sudo)([^[:alnum:]_.-]|$)' >/dev/null
 }
 
 # ------------------------------------------------------------ repository facts

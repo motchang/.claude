@@ -252,6 +252,10 @@ check "c1 cwd=W 200x true; cd ../main && commit" deny "$R2" "$(bash_json a1 "$W_
 check "c2 cwd=W cd ../main && commit # 16K"  deny "$TL" "$(bash_json a1 "$W_SIB" "cd ../main && git commit -m x # $xs")"
 check "c3 cwd=W git -C ../main commit # 16K" deny "$TL" "$(bash_json a1 "$W_SIB" "git -C ../main commit -m x # $xs")"
 check "c4 cwd=W git -C M commit # 16K"       deny "$TL" "$(bash_json a1 "$W_SIB" "git -C $M commit -m x # $xs")"
+# A writer early in a long multi-line command: the over-cap scan must read it all.
+echos=$(for i in $(seq 1 8000); do printf 'echo %d\n' $i; done)
+check "c5 cwd=M rm -rf M + 8000 echo lines (no agent)" deny "$TL" "$(bash_json "" "$M" "rm -rf $M${NL}$echos")"
+check "c6 cwd=W rm -rf M + 8000 echo lines"  deny "$TL" "$(bash_json a1 "$W_SIB" "rm -rf $M${NL}$echos")"
 
 # Should-fix 8: a dir the Write tool would create is judged by its nearest
 # existing parent, not by the cwd.
