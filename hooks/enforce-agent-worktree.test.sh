@@ -404,5 +404,76 @@ for c in "r''m -rf $M" "g''it -C $M commit -m x" "r\\m -rf $M"; do
   timed "m3 16385: $c" deny "$(bash_json a1 "$W" "${base}y$ys")"
 done
 
+# Quoted heredoc bodies are data: an allowlisted shape is judged without them. Each
+# case runs from the main thread (cwd=M and cwd outside any repo) and from an agent in W.
+O=$tmp/out
+TAB=$'\t'
+hd3() {  # <label> <allow|deny> <command>
+  check "h $1 (no agent, cwd=M)"   "$2" "" "$(bash_json "" "$M" "$3")"
+  check "h $1 (no agent, cwd=out)" "$2" "" "$(bash_json "" "$O" "$3")"
+  check "h $1 (agent, cwd=W)"      "$2" "" "$(bash_json a1 "$W" "$3")"
+}
+hb="- Tak / Taksfc${NL}cp x y${NL}git commit -m x${NL}rm -rf /${NL}rm -rf $M"
+hd3 "h1 cat > out <<'EOF' (/ cp git rm in body)" allow "cat > $O/pr.md <<'EOF'$NL$hb${NL}EOF"
+hd3 "h2 cat <<'EOF' > out"               allow "cat <<'EOF' > $O/pr.md$NL$hb${NL}EOF"
+hd3 "h3 cat > out <<\"EOF\""             allow "cat > $O/pr.md <<\"EOF\"$NL$hb${NL}EOF"
+hd3 "h4 cat > out <<\\EOF"               allow "cat > $O/pr.md <<\\EOF$NL$hb${NL}EOF"
+hd3 "h5 cat > out <<-'EOF' (tab EOF)"    allow "cat > $O/pr.md <<-'EOF'$NL$TAB$hb$NL${TAB}EOF"
+hd3 "h6 two quoted heredocs"             allow "cat > $O/a <<'EOF'$NL$hb${NL}EOF${NL}cat >> $O/b <<'X'$NL$hb${NL}X"
+hd3 "h7 tee -a out <<'EOF' >/dev/null"   allow "tee -a $O/a $O/b <<'EOF' >/dev/null$NL$hb${NL}EOF"
+hd3 "h8 gh pr create --body \"\$(cat <<'EOF'\"" allow "gh pr create --title x --body \"\$(cat <<'EOF'$NL- a / b${NL}EOF$NL)\""
+hd3 "h9 cat > out; gh pr edit --body-file" allow "cat > $O/pr.md <<'EOF'$NL- Tak / Taksfc${NL}EOF${NL}gh pr edit 669 --body-file $O/pr.md"
+hd3 "h10 cd out && cat > out/f; ls && wc -l" allow "cd $O && cat > $O/f <<'EOF'$NL$hb${NL}EOF${NL}ls && wc -l $O/f"
+# What the allowlist does not vouch for keeps the old reading, body and all.
+X="rm -rf $M/x"
+hd3 "d1 <<EOF with \$(rm -rf M)"         deny "cat > $O/a <<EOF$NL\$(rm -rf $M)${NL}EOF"
+hd3 "d2 bash <<'EOF'"                    deny "bash <<'EOF'$NL$X${NL}EOF"
+hd3 "d3 python3 - <<'EOF'"               deny "python3 - <<'EOF'${NL}import os${NL}os.system('rm -rf $M/x')${NL}EOF"
+hd3 "d4 cat <<'EOF' | sh"                deny "cat <<'EOF' | sh$NL$X${NL}EOF"
+hd3 "d5 env bash <<'EOF'"                deny "env bash <<'EOF'$NL$X${NL}EOF"
+hd3 "d6 cat > M/f <<'EOF'"               deny "cat > $M/f <<'EOF'${NL}x${NL}EOF"
+# A variable in the target is not a literal: old reading (unresolved, so denied in a repo).
+check "h d6b cat > \$M/f <<'EOF' (no agent, cwd=M)" deny "" "$(bash_json "" "$M" "cat > \$M/f <<'EOF'${NL}x${NL}EOF")"
+check "h d6b cat > \$M/f <<'EOF' (agent, cwd=W)"    deny "" "$(bash_json a1 "$W" "cat > \$M/f <<'EOF'${NL}x${NL}EOF")"
+hd3 "d7 cat > out <<'EOF', unterminated" deny "cat > $O/a <<'EOF'$NL$X"
+hd3 "d8 #! body, then run"               deny "cat > /tmp/s.sh <<'EOF'$NL#!/bin/sh$NL$X${NL}EOF${NL}chmod +x /tmp/s.sh && /tmp/s.sh"
+hd3 "d9 <<'EOF' inside double quotes"    deny "echo \"a <<'EOF'\"$NL$X${NL}EOF"
+hd3 "d10 EOF) line"                      deny "gh pr create --body \"\$(cat <<'EOF'${NL}x${NL}EOF)\"$NL$X${NL}EOF$NL)\""
+hd3 "d11 quoted then unquoted heredoc"   deny "cat > $O/a <<'EOF'${NL}x${NL}EOF${NL}cat <<EOF$NL\$($X)${NL}EOF"
+hd3 "d12 comsub )\" in body + rm (bash 3.2)" deny "gh pr create --body \"\$(cat <<'EOF'${NL}a)\"$NL$X$NL\"\$(cat <<'Y'${NL}EOF$NL)\""
+hd3 "A1 true; #<<'EOF'"                  deny "true$NL#<<'EOF'$NL$X${NL}EOF"
+hd3 "A2 echo \$'x\\' <<'EOF' #'"         deny "echo \$'x\\' <<'EOF' #'$NL$X${NL}EOF"
+hd3 "A3 echo \${x:-<<'EOF' }"            deny "echo \${x:-<<'EOF' }$NL$X${NL}EOF"
+hd3 "B4 b\\ash <<'EOF'"                  deny "b\\ash <<'EOF'$NL$X${NL}EOF"
+hd3 "B5 \$SHELL <<'EOF'"                 deny "\$SHELL <<'EOF'$NL$X${NL}EOF"
+hd3 "C6 while read v p; do \$v \$p"      deny "while read v p; do \$v \$p; done <<'EOF'${NL}rm $M/x${NL}EOF"
+hd3 "C7 patch -p0 <<'EOF'"               deny "patch -p0 <<'EOF'$NL--- $M/x$NL+++ $M/x$NL@@ -1 +1 @@$NL-a$NL+b${NL}EOF"
+hd3 "C8 git apply --unsafe-paths <<'EOF'" deny "git apply --unsafe-paths <<'EOF'$NL--- $M/x$NL+++ $M/x${NL}EOF"
+hd3 "C9 make -f - <<'EOF'"               deny "make -f - <<'EOF'${NL}all:$NL$TAB$X${NL}EOF"
+hd3 "C10 read d <<'EOF'; rm -rf \"\$d\"" deny "read d <<'EOF'$NL$M/x${NL}EOF${NL}rm -rf \"\$d\""
+hd3 "D11 cat > /tmp/s.sh; /tmp/s.sh"     deny "cat > /tmp/s.sh <<'EOF'$NL$X${NL}EOF$NL/tmp/s.sh"
+hd3 "t1 after EOF: rm -rf M"             deny "cat > $O/a <<'EOF'${NL}x${NL}EOF${NL}rm -rf $M"
+hd3 "t2 after EOF: mkdir M/x"            deny "cat > $O/a <<'EOF'${NL}x${NL}EOF${NL}mkdir $M/x"
+hd3 "t3 after EOF: cd M && rm x"         deny "cat > $O/a <<'EOF'${NL}x${NL}EOF${NL}cd $M && rm x"
+hd3 "t4 tee M/f <<'EOF'"                 deny "tee $M/f <<'EOF'${NL}x${NL}EOF"
+# ~- ~+ ~N name OLDPWD, PWD and the dir stack: such a command is never stripped.
+hd3 "t6 cd M && cd O && cat > ~-/pwn"    deny "cd $M && cd $O && cat > ~-/pwn <<'EOF'${NL}x${NL}EOF"
+hd3 "t7 cd M && tee ~+/x"                deny "cd $M && tee ~+/x <<'EOF'${NL}x${NL}EOF"
+hd3 "t8 after EOF: cd ~- && rm x"        deny "cd $M && cd $O && cat > $O/a <<'EOF'${NL}x${NL}EOF${NL}cd ~- && rm x"
+hd3 "t9 cd M && cd O && cat > ~1/pwn"    deny "cd $M && cd $O && cat > ~1/pwn <<'EOF'${NL}x${NL}EOF"
+hd3 "t5 cat >> M/f <<'EOF'"              deny "cat >> $M/f <<'EOF'${NL}x${NL}EOF"
+# Bail-outs bound the work: none of these may take long or slip through.
+hd=$(head -c 100000 /dev/zero | tr '\0' x)
+pp=""; cc=""; for i in $(seq 1 3900); do pp="$pp( "; cc="$cc )"; done
+ls5=""; for i in $(seq 1 5300); do ls5="${ls5}ls;"; done
+nls=$(head -c 15500 /dev/zero | tr '\0' '\n'; echo .); nls=${nls%.}   # keep the newlines
+for who in a1 ""; do
+  if [ -n "$who" ]; then cw=$W; wl=agent; else cw=$M; wl="no agent"; fi
+  timed "a8 ~100k heredoc + rm -rf M ($wl)" deny "$(bash_json "$who" "$cw" "cat > $O/a <<'EOF'$NL$hd${NL}EOF${NL}rm -rf $M")"
+  timed "a9 heredoc; rm -rf M; ( x3900 ls ) x3900 ($wl)" deny "$(bash_json "$who" "$cw" "cat > $O/a <<'EOF'${NL}x${NL}EOF${NL}rm -rf $M; $pp ls$cc")"
+  timed "a10 heredoc; rm -rf M; ls; x5300 ($wl)" deny "$(bash_json "$who" "$cw" "cat > $O/a <<'EOF'${NL}x${NL}EOF${NL}rm -rf $M;$ls5")"
+  timed "a11 heredoc; rm -rf M + 15500 blank lines ($wl)" deny "$(bash_json "$who" "$cw" "cat > $O/a <<'EOF'${NL}x${NL}EOF${NL}rm -rf $M$NL$nls")"
+done
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" = 0 ]

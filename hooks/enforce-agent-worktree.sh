@@ -7,6 +7,8 @@
 # eval sh -c ...), opaque: cwd plus every cd target, every path word of a mutating command.
 # A destructive verb on /, ~ or a parent of a main checkout is denied. Over 16384 chars
 # (or 64 dirs / 2000 paths) any redirect or writing word is denied as too long.
+# Quoted heredoc bodies are dropped before either reading, only for allowlisted shapes
+# (cat >/tee into a literal path, gh ... "$(cat <<'D' ...)"; see strip_heredocs).
 # Opt out: ~/.claude/hooks/no-isolation-repos ("<path> [until YYYY-MM-DD]"), .claude/no-isolation,
 # CLAUDE_ENFORCE_OFF=1 -- judged on the cwd / file dir only; only the user may edit the markers.
 # Not caught: symlinks made beforehand, writers not listed (gzip, sort -o, ditto, python -c).
@@ -33,7 +35,7 @@ printf '%s' "$in" | jq -e '(.tool_name|type=="string") and (.tool_name!="Bash" o
   || deny "フックの入力（tool_name / command）を読めないため判定できません。"
 q() { printf '%s' "$in" | jq -r "$1 // \"\"" 2>/dev/null; }
 tool=$(q '.tool_name'); agent=$(q '.agent_id'); cwd=$(q '.cwd')
-path=$(q '.tool_input.file_path // .tool_input.notebook_path'); cmd=$(q '.tool_input.command')
+path=$(q '.tool_input.file_path // .tool_input.notebook_path'); cmd=$(q '.tool_input.command'); cmd_raw=$cmd
 case $path in ''|/*) ap=$path;; *) ap=$cwd/$path;; esac   # file_path is relative to the cwd
 
 hint="※読み取りのつもりで拒否された場合は誤検知の可能性が高い（コマンド文字列中の > < | やバッククォート、変数展開したパスをリダイレクトと誤認する）。ファイルの書き込みは Bash ではなく Write/Edit ツールでリテラルな絶対パスに行い、新規ディレクトリ配下へ書く前に mkdir -p で親を作っておくと通る。※Bash の行き先は先頭の cd <リテラルなパス> の連鎖と git -C/--work-tree/--git-dir のリテラルで判定する。変数・バックスラッシュ・eval・sh -c・xargs・cd -・pushd を含むと cwd と全 cd 先で判定する。"
@@ -332,12 +334,124 @@ opaque() {
   fi
 }
 
+# ------------------------------------------------------------ quoted heredocs
+
+# A quoted heredoc's body (<<'D' <<"D" <<\D, also <<-) is data, but the readings above
+# take its lines for commands: `- a / b` reads as a destructive op on /. strip_heredocs
+# drops the bodies, only when the whole command is one of the shapes below; on anything
+# else cmd stays as written and the old reading applies. Shapes, each after an optional
+# literal `cd PATH &&` chain:  cat >|>> LIT <<'D' (redirect before or after),
+# tee [-a] LIT... <<'D' [>/dev/null],  gh pr|issue|release|api ... "$(cat <<'D' ... D )".
+# Between and after them only ; / && pieces of gh, cat, echo, printf, ls, wc, head,
+# tail, diff, true, rm, mkdir, cd, which are then judged as usual.
+HD_L='[A-Za-z0-9_./~+,:@%][A-Za-z0-9_./~+,:@%=-]*'
+HD_CD="^cd[ ]+$HD_L[ ]*&&[ ]*(.*)$"
+HD_RA="^cat[ ]+(>>?[ ]*$HD_L[ ]+<<|<<[ ]+>>?[ ]*$HD_L)[ ]*$"
+HD_RB="^tee([ ]+-a)?([ ]+$HD_L)+[ ]+<<([ ]+>/dev/null)?[ ]*$"
+HD_RC='^gh[ ]+(pr|issue|release|api)([ ].*)?[ ]"\$\(cat[ ]+<<$'
+HD_GC='"$(cat'   # in a variable: bash 3.2 cannot parse it inside ${x%...}
+
+# hd_scan <text>: fails on what the tail check cannot read (a backslash outside single
+# quotes, $' ${ $( `, # | ( ) or a lone & outside quotes, <<, a quote across lines).
+# HU gets the text with quoted chars as x and ; && newline as separate words.
+hd_scan() {
+  local s=$1 n=${#1} i=0 c nx pv="" q="" u=""
+  while [ $i -lt $n ]; do
+    c=${s:i:1}; nx=${s:i+1:1}
+    if [ "$q" = "'" ]; then
+      case $c in "'") q="";; $'\n') return 1;; esac; u+=x
+    else
+      case $c in '\'|'`'|$'\r') return 1;; '$') case $nx in "'"|'{'|'(') return 1;; esac;; esac
+      if [ "$q" = '"' ]; then
+        case $c in '"') q="";; $'\n') return 1;; esac; u+=x
+      else
+        case $c in
+          "'"|'"') q=$c; u+=x;;
+          '#'|'|'|'('|')') return 1;;
+          '&') if [ "$nx" = '&' ]; then i=$((i+1)); u+=' && '
+               elif [ "$pv" = '>' ] || [ "$nx" = '>' ]; then u+=$c; else return 1; fi;;
+          ';'|$'\n') u+=' ; ';;
+          '<') [ "$nx" = '<' ] && return 1; u+=$c;;
+          *) u+=$c;;
+        esac
+      fi
+    fi
+    pv=$c; i=$((i+1))
+  done
+  [ -z "$q" ] || return 1
+  HU=$u
+}
+
+strip_heredocs() {
+  local IFS=$'\n' ln=() n i=0 h x w tok d dash kind pre post l lits=() out="" tl="" tll=0 first=1 bp bo e=1 g=0 p=0
+  ln=($cmd); n=${#ln[@]}
+  while [ $i -lt $n ]; do
+    h=${ln[i]}; i=$((i+1))
+    case $h in *'~'[-+0-9]*) return 0;; esac   # ~- ~+ ~N (OLDPWD, PWD, dir stack) are not followed
+    case $h in *'<<'*) ;; *)   # a tail line
+      [ $first = 1 ] && return 0
+      out+=$h$'\n'; tl+=$h$'\n'; tll=$((tll+1))
+      { [ ${#tl} -gt 1024 ] || [ $tll -gt 200 ]; } && return 0
+      continue;; esac
+    [ ${#h} -le 1024 ] || return 0
+    case $h in *'<<'*'<<'*) return 0;; esac
+    pre=${h%%<<*}; tok=${h#*<<}; post=""
+    case $tok in *' '*) post=" ${tok#* }"; tok=${tok%% *};; esac
+    dash=0; case $tok in -*) dash=1; tok=${tok#-};; esac
+    case $tok in \'*\') d=${tok#\'}; d=${d%\'};; \"*\") d=${tok#\"}; d=${d%\"};; \\*) d=${tok#\\};; *) return 0;; esac
+    case $d in ''|[0-9]*|*[!A-Za-z0-9_]*) return 0;; esac
+    x=$pre'<<'$post
+    while [[ $x =~ $HD_CD ]]; do x=${BASH_REMATCH[1]}; done
+    IFS=' '
+    if [[ $x =~ $HD_RA ]]; then
+      kind=a; w=${x#cat}; w=${w/<</ }; w=${w//>/ }; set -- $w; lits+=("$1")
+    elif [[ $x =~ $HD_RB ]]; then
+      kind=b; w=${x#tee}; w=${w%%<<*}; set -- $w; for w; do [ "$w" = -a ] || lits+=("$w"); done
+    elif [[ $x =~ $HD_RC ]]; then
+      kind=c; hd_scan "${x%"$HD_GC"*}" || return 0
+      case " $HU " in *' ; '*|*' && '*) return 0;; esac
+    else return 0; fi
+    IFS=$'\n'
+    out+=$pre$post$'\n'; first=0; bp=0; bo=0
+    while :; do   # the body, up to a line that is exactly the delimiter
+      [ $i -lt $n ] || return 0
+      l=${ln[i]}; i=$((i+1))
+      [ $dash = 1 ] && while :; do case $l in $'\t'*) l=${l#?};; *) break;; esac; done
+      [ "$l" = "$d" ] && break
+      case $l in "$d"*) return 0;; esac
+      if [ $kind = c ]; then case $l in *')'*) bp=1;; esac; case $l in *[\"\$\`\\]*) bo=1;; esac; fi
+    done
+    # Bash 3.2 ends "$( at a )" it meets in the body, so such a body is not read as data.
+    [ $kind = c ] || continue
+    { [ $bp = 1 ] && [ $bo = 1 ]; } && return 0
+    [ $i -lt $n ] || return 0
+    l=${ln[i]}; i=$((i+1))
+    case $l in ')"'*) ;; *) return 0;; esac
+    case $l in *'~'[-+0-9]*) return 0;; esac
+    out+=$l$'\n'; tl+="gh pr ${l#')"'}"$'\n'; tll=$((tll+1))
+    { [ ${#tl} -gt 1024 ] || [ $tll -gt 200 ]; } && return 0
+  done
+  [ $first = 0 ] || return 0
+  hd_scan "$tl" || return 0
+  IFS=$' \t\n'; set -- $HU   # set -f is on: no globbing
+  for w; do
+    if [ $g = 1 ]; then case $w in pr|issue|release|api) g=0; continue;; *) return 0;; esac; fi
+    if [ $e = 1 ]; then
+      case $w in gh) g=1;; cat|echo|printf|ls|wc|head|tail|diff|true|rm|mkdir|cd) ;; *) return 0;; esac
+      for x in ${lits[@]+"${lits[@]}"}; do [ "$w" = "$x" ] && return 0; done
+      e=0; p=$((p+1)); [ $p -gt 200 ] && return 0
+    else case $w in ';'|'&&') e=1;; esac; fi
+  done
+  [ $g = 0 ] || return 0
+  cmd=${out%$'\n'}
+}
+
 # ------------------------------------------------------------ guard
 
 # The opt-out markers are the user's to edit, whoever asks and from wherever. (Coarse
 # on Bash: any command naming one with a writing word, e.g. git log -- .claude/no-isolation.)
 if [ "$tool" = Bash ]; then
-  case $(printf '%s' "$cmd" | tr -d "\\\\\"'") in *no-isolation*) mut_ev "$cmd" && deny "$SELF";; esac
+  case $(printf '%s' "$cmd_raw" | tr -d "\\\\\"'") in *no-isolation*) mut_ev "$cmd_raw" && deny "$SELF";; esac
 else
   lexnorm "$ap"; case $LEX in */.claude/no-isolation|*/hooks/no-isolation-repos) deny "$SELF";; esac
 fi
@@ -379,7 +493,8 @@ pdir=$(cd -P -- "$dir" 2>/dev/null && pwd -P) || pdir=$dir
 
 if [ "$tool" = "Bash" ]; then
   # Cap first, before anything that grows faster than the input.
-  if [ ${#cmd} -gt 16384 ]; then mut_ev "$cmd" && deny "$LONG"; allow; fi
+  if [ ${#cmd_raw} -gt 16384 ]; then mut_ev "$cmd_raw" && deny "$LONG"; allow; fi
+  case $cmd in *'<<'*) strip_heredocs;; esac   # bodies of allowlisted quoted heredocs
   MODE=structured; MUT=0
   case $cmd in *[\\\$\`]*|*'<<'*) opaque;; *) structured || opaque;; esac
 else
