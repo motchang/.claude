@@ -38,10 +38,14 @@
 `hooks/enforce-agent-worktree.sh` が PreToolUse で deny する。git 管理下のパスに
 だけ効き、`~/.claude/hooks/no-isolation-repos` に載っているリポジトリと、
 `.claude/no-isolation` を置いたリポジトリは対象外（そこでは直接編集してよい）。
+リストに載っているかは、Edit / Write では書き込むファイルのディレクトリで、
+Bash では cwd と書き込み先のパスごとに判定する。`.claude/no-isolation` は cwd でだけ判定する。
 
 - **Edit / Write / NotebookEdit** — 常に。サブエージェント かつ worktree 内が条件。
 - **Bash** — リポジトリ内のファイルを実際に書き換えるコマンドだけ。読み取り・検索・
   ビルド・テストは通る。リポジトリ外への書き込み（`/tmp` など）も通る。
+  ただし、git の設定を差し込む形（`-c alias.*` / `-c include.*`、`GIT_CONFIG*=`、
+  変数で書いた git サブコマンド）は、読み取りでも止まる。
 
 レビューの委譲はフックでは強制できない。読み取りだけで deny が発火しないので、
 上の方針として守る。
