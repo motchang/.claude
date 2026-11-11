@@ -9,9 +9,31 @@
 # (or 64 dirs / 2000 paths) any redirect or writing word is denied as too long.
 # Quoted heredoc bodies are dropped before either reading, only for allowlisted shapes
 # (cat >/tee into a literal path, gh ... "$(cat <<'D' ...)"; see strip_heredocs).
-# Opt out: ~/.claude/hooks/no-isolation-repos ("<path> [until YYYY-MM-DD]"), .claude/no-isolation,
-# CLAUDE_ENFORCE_OFF=1 -- judged on the cwd / file dir only; only the user may edit the markers.
-# Not caught: symlinks made beforehand, writers not listed (gzip, sort -o, ditto, python -c).
+# Opt out: ~/.claude/hooks/no-isolation-repos ("<path> [until YYYY-MM-DD]") on the cwd / file
+# dir, and on each Bash target in a listed main checkout that no unlisted one holds. The
+# list clears no target of a command (NOEX) that has the lowercase whole word clean or
+# submodule anywhere (quotes and backslashes dropped, so -m "clean up", make clean and
+# submodule update lose it too), a verb or git subcommand from $ or `, or GIT_CONFIG*=.
+# Nor does it cover the listed root removed (structured reading only), a parent removed
+# that holds a main checkout of the cwd or the cd chain, or, once it has cleared a path,
+# a writing command with an unresolved target (R2U, outside a repo too). git -c alias.*/
+# include.*/includeIf.* (also --config-env), GIT_CONFIG*= and a git subcommand from $ or `
+# make the command an unresolved writer, read-only use too (GIT_CONFIG_GLOBAL=x git status,
+# git $v), from a cwd in any repo, agent or main thread.
+# From a guarded cwd with no agent, rule 1's original reading still refuses git subcommands
+# into a listed repo; other writers (rm, touch, redirects) into it pass, as Write does.
+# .claude/no-isolation, CLAUDE_ENFORCE_OFF=1: cwd / file dir only. Only the user may edit them.
+# Not caught: symlinks made beforehand (a file symlink is judged where the link is, not its
+# target), writers not listed (gzip, sort -o, ditto, python -c), rm -rf of a dir holding a
+# main checkout given as a direct path when that checkout is not the cwd's or on the cd
+# chain (so a repo nested in a listed one, removed with its parent dir), GIT_* values
+# resolved against the cd base instead of the -C dir (cd D && GIT_WORK_TREE=../M git -C L
+# checkout), git's env set without a GIT_*= word (printf -v, read <<<), opaque
+# `x=$y; rm -rf <listed root>`, a git subcommand from a brace or glob (cl{ean,}, cl?an,
+# {checkout,}), printf -v GIT_CONFIG_PARAMETERS, aliases from config files (also HOME=
+# another .gitconfig, git config alias.x clean then git x), --exec-path=<dir>, the script
+# run by bash -c / sh -c (bash -c 'git -C M clean -ffdx' passes; only ; & | ( inside it
+# split off pieces that are judged), a script built at run time (bash -c "$s").
 set -uo pipefail
 set -f   # no globbing: arguments are inspected as written, never expanded
 export LC_ALL=C
@@ -105,6 +127,17 @@ each_base() { local b; [ $TOO_MANY = 1 ] && return 0; for b in "${BASES[@]}"; do
 git_verb() {
   local k=$1 j w v b cur mut=0 hadc out=0
   sub_after "$k"; local si=$SUBI
+  # clean -x and submodule (foreach, deinit) reach nested repos no target lookup sees;
+  # such a command gets no help from the opt-out list (NOEX; the word scan before the
+  # resolve loop also catches them). A subcommand from a variable could be anything: an
+  # unresolved writer.
+  case $SUB in clean|submodule) NOEX=1;; *'$'*|*'`'*) MUT=1; UNRES=1; NOEX=1;; esac
+  # An alias (or an included config file) set on the command line makes any subcommand
+  # a writer, to a place this reading cannot follow.
+  for ((j=k+1; j<si; j++)); do w=${WORDS[j]}
+    case $w in -c|--config-env) j=$((j+1)); w=${WORDS[j]-};; -c*) w=${w#-c};; --config-env=*) w=${w#*=};; *) continue;; esac
+    case $w in [aA][lL][iI][aA][sS].*|[iI][nN][cC][lL][uU][dD][eE].*|[iI][nN][cC][lL][uU][dD][eE][iI][fF].*) MUT=1; UNRES=1; NOEX=1;; esac
+  done
   case $SUB in
     commit|apply|am|checkout|switch|merge|rebase|reset|revert|clean|add|rm|mv|restore|cherry-pick|pull|submodule|filter-branch|update-ref|clone|init) mut=1;;
     # These write only where -o/--output points; that path alone is judged.
@@ -161,7 +194,7 @@ judge_verb() {
         --dry-run|--just-print|--recon|--question) cls=none;; --*|-*[!a-zA-Z]*) ;; -*[nq]*) cls=none;; esac; done;;
   esac
   # A verb read from a variable or $(...) could be anything.
-  [ $cls = none ] && { case ${WORDS[k]} in *'$'*) MUT=1; each_base . 0;; esac; return 0; }
+  [ $cls = none ] && { case ${WORDS[k]} in *'$'*) MUT=1; NOEX=1; each_base . 0;; esac; return 0; }
   MUT=1
   for w in ${GENV[@]+"${GENV[@]}"}; do each_base "$w" 0; done
   if [ $cls = file ]; then
@@ -190,7 +223,8 @@ judge_seg() {
   NW=${#WORDS[@]}
   for r in ${REDS[@]+"${REDS[@]}"}; do case $r in /dev/*) continue;; esac; MUT=1; each_base "$r" 0; done
   # GIT_* anywhere (VAR=, export, declare, env) counts for the rest of the command.
-  for w in ${WORDS[@]+"${WORDS[@]}"}; do case $w in GIT_CONFIG=*|GIT_CONFIG_[PCKVGS]*=*) UNRES=1;; GIT_*=*) GENV+=("${w#*=}");; esac; done
+  # Config from the environment can define an alias: a writer to a place not followed.
+  for w in ${WORDS[@]+"${WORDS[@]}"}; do case $w in GIT_CONFIG=*|GIT_CONFIG_[PCKVGS]*=*) MUT=1; UNRES=1; NOEX=1;; GIT_*=*) GENV+=("${w#*=}");; esac; done
   while [ $i -lt $NW ]; do w=${WORDS[i]}
     case $w in [A-Za-z_]*=*) case ${w%%=*} in *[!A-Za-z0-9_]*) break;; esac; i=$((i+1));; *) break;; esac
   done
@@ -471,10 +505,11 @@ top=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)
 # Global opt-out list, kept outside any repo so it needs no in-repo marker file.
 # A line may carry an expiry — "<path> until YYYY-MM-DD" — and stops matching
 # after that day, so a temporary exemption reverts to guarded on its own.
+# EX holds the live entries, compared as written (after ~ expansion) with a main
+# checkout's top: here the cwd's, and in the resolve loop each target's (ex_main).
 exempt=~/.claude/hooks/no-isolation-repos
+EX=()
 if [ -f "$exempt" ]; then
-  common_root=$(git -C "$dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
-  main_top=${common_root%/.git}
   today=$(date +%F)
   while IFS= read -r line; do
     case "$line" in ''|\#*) continue;; esac
@@ -485,9 +520,15 @@ if [ -f "$exempt" ]; then
     esac
     line=${line%/}
     eval "line=$line" 2>/dev/null
-    [ -n "$top" ] && { [ "$line" = "$top" ] || [ "$line" = "$main_top" ]; } && allow
+    [ -n "$line" ] && EX+=("$line")
   done < "$exempt"
 fi
+if [ -n "$top" ] && [ ${#EX[@]} -gt 0 ]; then
+  common_root=$(git -C "$dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+  main_top=${common_root%/.git}
+  for line in "${EX[@]}"; do [ "$line" = "$top" ] || [ "$line" = "$main_top" ] && allow; done
+fi
+is_exempt() { local e; for e in ${EX[@]+"${EX[@]}"}; do [ "$e" = "$1" ] && return 0; done; return 1; }
 
 pdir=$(cd -P -- "$dir" 2>/dev/null && pwd -P) || pdir=$dir
 
@@ -495,7 +536,7 @@ if [ "$tool" = "Bash" ]; then
   # Cap first, before anything that grows faster than the input.
   if [ ${#cmd_raw} -gt 16384 ]; then mut_ev "$cmd_raw" && deny "$LONG"; allow; fi
   case $cmd in *'<<'*) strip_heredocs;; esac   # bodies of allowlisted quoted heredocs
-  MODE=structured; MUT=0
+  MODE=structured; MUT=0; NOEX=0
   case $cmd in *[\\\$\`]*|*'<<'*) opaque;; *) structured || opaque;; esac
 else
   # Rule 2: the nearest existing parent of file_path, as written and normalized (batch_resolve).
@@ -618,23 +659,62 @@ orig_r1() {
 info "$pdir"; CWD_C=$IMC; MAINS=("$IMT")
 for b in ${BASES[@]+"${BASES[@]}"}; do info "$b"; MAINS+=("$IMT"); done
 HOMEP=$(cd -P -- "$HOME" 2>/dev/null && pwd -P) || HOMEP=$HOME
-HIT=0; R1HIT=0
+# ex_main <main top>: it is listed, and so is every main checkout that holds it (a write
+# into a repo nested in M changes M's checkout). The walk stops at a linked worktree or
+# outside any repo. A lookup over the 64-dir cap counts as not exempt.
+ex_main() {
+  local t=$1 p
+  while is_exempt "$t"; do
+    p=${t%/*}; p=${p:-/}
+    [ "$p" = "$t" ] && return 0
+    info "$p"; [ $TOO_MANY = 1 ] && return 1
+    [ "$IM" = 1 ] || return 0
+    t=$IMT
+  done
+  return 1
+}
+# The word scan behind NOEX, coarse on purpose: clean or submodule anywhere, in either
+# reading with quotes and backslashes dropped (quoted text such as -m "clean up" counts).
+if [ "$tool" = Bash ] && [ ${#EX[@]} -gt 0 ] && [ "${NOEX-0}" = 0 ]; then
+  { printf '%s' "$cmd" | sed -e ':a' -e '/\\$/{' -e 'N' -e 's/\\\n//' -e 'ba' -e '}'; printf '\n'; printf '%s' "$cmd"; } \
+    | tr -d "\\\\\"'" | grep -E '(^|[^[:alnum:]_])(clean|submodule)([^[:alnum:]_]|$)' >/dev/null && NOEX=1
+fi
+HIT=0; R1HIT=0; EXU=0   # EXU: the list cleared a path that would have hit
 if [ ${#PS[@]} -gt 0 ] && [ $TOO_MANY = 0 ]; then
   while IFS=$'\t' read -r L self des; do
     [ -n "$L" ] || continue
     info "$L"; [ $TOO_MANY = 1 ] && break
-    [ "$IM" = 1 ] && HIT=1
-    { [ -n "$IMC" ] && [ "$IMC" = "$CWD_C" ]; } && R1HIT=1
-    [ -n "$top" ] && case $L/ in "$top"/*) R1HIT=1;; esac
+    # A path into an opted-out main checkout is judged as one outside any repo, except
+    # that removing the checkout itself is still refused (below, and via MAINS).
+    et=""; [ "$IM" = 1 ] && [ "${NOEX-0}" = 0 ] && is_exempt "$IMT" && et=$IMT
+    if [ -n "$et" ] && ex_main "$et"; then
+      EXU=1
+      # Only the structured reading knows the verb on L is destructive; the opaque one
+      # marks every path word so, cd and -C operands too.
+      [ "$des" = 1 ] && [ "$self" = 1 ] && [ "$L" = "$et" ] && [ "${MODE-}" = structured ] && HIT=1
+    else
+      [ $TOO_MANY = 1 ] && break
+      [ -n "$et" ] && info "$L"   # ex_main moved IM/IMT/IMC to a parent
+      [ "$IM" = 1 ] && HIT=1
+      { [ -n "$IMC" ] && [ "$IMC" = "$CWD_C" ]; } && R1HIT=1
+      [ -n "$top" ] && case $L/ in "$top"/*) R1HIT=1;; esac
+    fi
     if [ "$des" = 1 ] && [ "$self" = 1 ]; then
       [ "$L" = / ] || [ "$L" = "$HOMEP" ] && HIT=1
-      for m in "${MAINS[@]}"; do [ -n "$m" ] && case $m/ in "$L"/*) HIT=1;; esac; done
+      for m in "${MAINS[@]}"; do [ -n "$m" ] && case $m/ in "$L"/*)   # a listed m itself: above
+        [ "$L" = "$m" ] && [ "${NOEX-0}" = 0 ] && is_exempt "$m" && { EXU=1; continue; }; HIT=1;; esac; done
     fi
   done < <(batch_resolve | sort -u)
 fi
 
 [ $TOO_MANY = 1 ] && deny "$LONG"
-if [ $INREPO = 0 ]; then [ $HIT = 1 ] && { [ -n "$agent" ] && deny "$R2"; deny "$R1"; }; allow; fi
+if [ $INREPO = 0 ]; then
+  [ $HIT = 1 ] && { [ -n "$agent" ] && deny "$R2"; deny "$R1"; }
+  # Out of any repo an unresolved target is let through, unless the list cleared a path:
+  # the variable could name the main checkout the listed one sits beside.
+  [ $EXU = 1 ] && [ $MUT = 1 ] && [ $UNRES = 1 ] && { [ -n "$agent" ] && deny "$R2U"; deny "$R1"; }
+  allow
+fi
 if [ -z "$agent" ]; then
   [ "$tool" = Bash ] || deny "$R1"
   { [ $HIT = 1 ] || [ $R1HIT = 1 ] || { [ $MUT = 1 ] && [ $UNRES = 1 ]; }; } && deny "$R1"

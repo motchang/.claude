@@ -35,15 +35,18 @@ chmod 600 "$tmp/noperm"
 
 # The hook reads ~/.claude/hooks/no-isolation-repos. Point HOME at a private one
 # so the real list cannot change the outcome, and use it for opt-out cases.
-for r in opt-past opt-future opt-marker; do
+# opt-future/inner is an unlisted repo inside a listed one; outer/ex a listed repo
+# inside an unlisted one.
+for r in opt-past opt-future opt-marker opt-future/inner outer outer/ex; do
   g init -q "$tmp/$r"; g -C "$tmp/$r" commit -q --allow-empty -m i
 done
-mkdir -p "$tmp/home/.claude/hooks" "$tmp/opt-marker/.claude"
+mkdir -p "$tmp/home/.claude/hooks" "$tmp/opt-marker/.claude" "$tmp/opt-future/sub"
 touch "$tmp/opt-marker/.claude/no-isolation"
 cat >"$tmp/home/.claude/hooks/no-isolation-repos" <<EOF
 # test list
 $tmp/opt-past until 2000-01-01
 $tmp/opt-future/ until 2999-12-31
+$tmp/outer/ex
 EOF
 export HOME=$tmp/home
 
@@ -222,12 +225,89 @@ check "o3 until future: exempt"              allow ""  "$(bash_json "" "$tmp/opt
 check "o4 until future: exempt (Write)"      allow ""  "$(write_json "" "$tmp/opt-future" "$tmp/opt-future/a")"
 check "o5 .claude/no-isolation: exempt"      allow ""  "$(bash_json "" "$tmp/opt-marker" "git commit -m x")"
 check "o6 not listed: guarded"               deny "$R1" "$(bash_json "" "$M" "git commit -m x")"
-# The opt-out is judged on the cwd (or the Write dir) only, never on a target: a
-# command from a guarded repo gains no route into an opted-out one.
-check "o7 cwd=M cd opt-future && rm f"       deny "$R2" "$(bash_json a1 "$M" "cd $tmp/opt-future && rm f")"
-check "o8 cwd=M git -C opt-future commit"    deny "$R2" "$(bash_json a1 "$M" "git -C $tmp/opt-future commit -m x")"
+# The list is also judged on each Bash target, as Write judges it on the file's dir: a
+# path into a listed main checkout counts as one outside any repo. Each other target
+# is judged as before, so one path into M still denies. The .claude/no-isolation marker
+# is judged on the cwd only.
+OF=$tmp/opt-future
+mkdir -p "$tmp/out"
+check "o7 cwd=M cd opt-future && rm f"       allow ""  "$(bash_json a1 "$M" "cd $OF && rm f")"
+check "o8 cwd=M git -C opt-future commit"    allow ""  "$(bash_json a1 "$M" "git -C $OF commit -m x")"
 check "o9 cwd=W echo > opt-marker/a"         deny "$R2" "$(bash_json a1 "$W_SIB" "echo x > $tmp/opt-marker/a")"
-check "o10 Write agent cwd=M opt-future/a"   allow ""  "$(write_json a1 "$M" "$tmp/opt-future/a")"
+check "o10 Write agent cwd=M opt-future/a"   allow ""  "$(write_json a1 "$M" "$OF/a")"
+check "o11 cwd=M cd opt-future && touch f"   allow ""  "$(bash_json a1 "$M" "cd $OF && touch f")"
+check "o12 cwd=M cd opt-future && git add f && commit" allow "" "$(bash_json a1 "$M" "cd $OF && git add f && git commit -m x")"
+check "o13 cwd=W echo > opt-future/a"        allow ""  "$(bash_json a1 "$W_SIB" "echo x > $OF/a")"
+check "o14 cwd=M git -C opt-future commit && git commit" deny "$R2" "$(bash_json a1 "$M" "git -C $OF commit -m x && git commit -m y")"
+check "o15 cwd=W touch opt-future/a M/a"     deny "$R2" "$(bash_json a1 "$W_SIB" "touch $OF/a $M/a")"
+check "o16 cwd=W git -C opt-future --work-tree=M checkout" deny "$R2" "$(bash_json a1 "$W_SIB" "git -C $OF --work-tree=$M checkout -- .")"
+check "o17 cwd=W git -C opt-past commit (expired)" deny "$R2" "$(bash_json a1 "$W_SIB" "git -C $tmp/opt-past commit -m x")"
+check "o18 cwd=W rm -rf opt-future/\$x"         deny "確認できません" "$(bash_json a1 "$W_SIB" "rm -rf $OF/\$x")"
+check "o19 cwd=W echo > opt-future/inner/a (unlisted, nested)" deny "$R2" "$(bash_json a1 "$W_SIB" "echo x > $OF/inner/a")"
+check "o20 cwd=W echo > outer/ex/a (listed, in unlisted)" deny "$R2" "$(bash_json a1 "$W_SIB" "echo x > $tmp/outer/ex/a")"
+# Destructive verbs: inside a listed checkout they pass; the checkout itself, a parent
+# of it, /, ~ and a parent of any other main checkout stay refused.
+check "o21 cwd=W rm -rf opt-future/sub"      allow ""  "$(bash_json a1 "$W_SIB" "rm -rf $OF/sub")"
+check "o22 cwd=W rm -rf opt-future"          deny "$R2" "$(bash_json a1 "$W_SIB" "rm -rf $OF")"
+check "o23 cwd=W rm -rf opt-future/"         deny "$R2" "$(bash_json a1 "$W_SIB" "rm -rf $OF/")"
+check "o24 cwd=M cd opt-future && rm -rf ."  deny "$R2" "$(bash_json a1 "$M" "cd $OF && rm -rf .")"
+check "o25 cwd=M cd opt-future && rm -rf .." deny "$R2" "$(bash_json a1 "$M" "cd $OF && rm -rf ..")"
+check "o26 cwd=out rm -rf opt-future (no agent)" deny "$R1" "$(bash_json "" "$tmp/out" "rm -rf $OF")"
+check "o27 cwd=W rm -rf opt-future/sub M/a"  deny "$R2" "$(bash_json a1 "$W_SIB" "rm -rf $OF/sub $M/a")"
+# Outside any repo, a path into a listed checkout passes like any other.
+check "o28 cwd=out cd opt-future && commit (no agent)" allow "" "$(bash_json "" "$tmp/out" "cd $OF && git commit -m x")"
+check "o29 cwd=out git -C opt-future commit"  allow ""  "$(bash_json a1 "$tmp/out" "git -C $OF commit -m x")"
+check "o30 cwd=out git -C opt-past commit"    deny "$R2" "$(bash_json a1 "$tmp/out" "git -C $tmp/opt-past commit -m x")"
+# No agent in a guarded repo: rule 1's original reading still refuses any git commit.
+check "o31 cwd=M git -C opt-future commit (no agent)" deny "$R1" "$(bash_json "" "$M" "git -C $OF commit -m x")"
+check "o32 cwd=M echo > opt-future/a (no agent)" allow "" "$(bash_json "" "$M" "echo x > $OF/a")"
+# The opaque reading ($ \ ` <<) marks every path word destructive, cd and -C operands
+# too, so there the listed checkout itself is not refused as a removal: a commit with
+# a heredoc or variable message passes. From cwd=M the cwd still counts, so it denies.
+HM="\"\$(cat <<'EOF'${NL}msg${NL}EOF${NL})\""
+check "o33 cwd=W git -C opt-future commit -m heredoc" allow "" "$(bash_json a1 "$W_SIB" "git -C $OF commit -m $HM")"
+check "o34 cwd=out cd opt-future && commit -m heredoc" allow "" "$(bash_json a1 "$tmp/out" "cd $OF && git commit -m $HM")"
+check "o35 cwd=W git -C opt-future commit -m \"\$MSG\"" allow "" "$(bash_json a1 "$W_SIB" "git -C $OF commit -m \"\$MSG\"")"
+check "o36 cwd=M git -C opt-future commit -m heredoc" deny "$R2" "$(bash_json a1 "$M" "git -C $OF commit -m $HM")"
+check "o37 cwd=W cd opt-future && rm -rf \"\$x\"/a" deny "確認できません" "$(bash_json a1 "$W_SIB" "cd $OF && rm -rf \"\$x\"/a")"
+check "o38 cwd=W x=\$y; rm -rf opt-future (opaque: passes)" allow "" "$(bash_json a1 "$W_SIB" "x=\$y; rm -rf $OF")"
+check "o39 cwd=W x=\$y; cd opt-future && rm -rf .. (opaque)" deny "$R2" "$(bash_json a1 "$W_SIB" "x=\$y; cd $OF && rm -rf ..")"
+# git clean -x removes untracked nested repos (opt-future/inner) the lookup never sees,
+# so a command with git clean gets no help from the list on any target. From the
+# listed cwd itself it still passes.
+check "o40 cwd=W git -C opt-future clean -ffdx" deny "$R2" "$(bash_json a1 "$W_SIB" "git -C $OF clean -ffdx")"
+check "o41 cwd=W git -C opt-future clean -fd"   deny "$R2" "$(bash_json a1 "$W_SIB" "git -C $OF clean -fd")"
+check "o42 cwd=out cd opt-future && git clean -fdx" deny "$R2" "$(bash_json a1 "$tmp/out" "cd $OF && git clean -fdx")"
+check "o43 cwd=opt-future git clean -ffdx"      allow ""  "$(bash_json a1 "$OF" "git clean -ffdx")"
+# Once the list has cleared a path, an unresolved target denies outside a repo too: the
+# variable may name the main checkout the listed one sits beside. Without the list
+# involved, out-of-repo work with a variable target passes as before.
+check "o44 cwd=out x=M; cd opt-future && rm -rf \"\$x\"/f" deny "確認できません" "$(bash_json a1 "$tmp/out" "x=$M; cd $OF && rm -rf \"\$x\"/f")"
+check "o45 same, no agent"                      deny "$R1" "$(bash_json "" "$tmp/out" "x=$M; cd $OF && rm -rf \"\$x\"/f")"
+check "o46 cwd=out x=/tmp/q; rm -rf \"\$x\"/f"  allow ""  "$(bash_json a1 "$tmp/out" "x=/tmp/q; rm -rf \"\$x\"/f")"
+check "o47 cwd=out x=/tmp/q; rm -rf \"\$x\"/f (no agent)" allow "" "$(bash_json "" "$tmp/out" "x=/tmp/q; rm -rf \"\$x\"/f")"
+# NOEX is coarse: the words clean / submodule anywhere, a verb or git subcommand from a
+# variable, or git config from the environment leave every target judged without the list.
+check "o48 cwd=W G=git; \$G -C opt-future clean -ffdx" deny "$R2" "$(bash_json a1 "$W_SIB" "G=git; \$G -C $OF clean -ffdx")"
+check "o49 cwd=W git -C opt-future submodule foreach git clean -ffdx" deny "$R2" "$(bash_json a1 "$W_SIB" "git -C $OF submodule foreach git clean -ffdx")"
+check "o50 cwd=W git -C opt-future submodule deinit -f --all" deny "$R2" "$(bash_json a1 "$W_SIB" "git -C $OF submodule deinit -f --all")"
+check "o51 cwd=W git -C opt-future commit -m \"clean up\"" deny "$R2" "$(bash_json a1 "$W_SIB" "git -C $OF commit -m \"clean up\"")"
+check "o52 cwd=W git -C opt-future c\\lean -ffdx" deny "" "$(bash_json a1 "$W_SIB" "git -C $OF c\\lean -ffdx")"
+# An alias or included config on the command line, config from the environment, or a
+# subcommand from a variable makes git a writer to a place not followed: denied for any
+# repo, listed or not (on HEAD these passed even against M).
+U1=確認できません
+check "o53 cwd=W git -C opt-future -c alias.x=clean x -ffdx" deny "$U1" "$(bash_json a1 "$W_SIB" "git -C $OF -c alias.x=clean x -ffdx")"
+check "o54 cwd=W git -C M -c alias.x=clean x -ffdx" deny "$U1" "$(bash_json a1 "$W_SIB" "git -C $M -c alias.x=clean x -ffdx")"
+check "o55 cwd=W git -C M -c Alias.x=... x" deny "$U1" "$(bash_json a1 "$W_SIB" "git -C $M -c Alias.x=clean x -ffdx")"
+check "o56 cwd=W git -C M -calias.x=... x (glued)" deny "$U1" "$(bash_json a1 "$W_SIB" "git -C $M -calias.x=clean x -ffdx")"
+check "o57 cwd=W git -C M --config-env=alias.x=V x" deny "$U1" "$(bash_json a1 "$W_SIB" "git -C $M --config-env=alias.x=V x -ffdx")"
+check "o58 cwd=W git -C M -c include.path=/tmp/c x" deny "$U1" "$(bash_json a1 "$W_SIB" "git -C $M -c include.path=/tmp/c x")"
+check "o59 cwd=M git -c alias.x=clean x (no agent)" deny "$R1" "$(bash_json "" "$M" "git -c alias.x=clean x -ffdx")"
+check "o60 cwd=W git -C M \$s -ffdx"       deny "$R2" "$(bash_json a1 "$W_SIB" "git -C $M \$s -ffdx")"
+check "o61 cwd=W GIT_CONFIG_COUNT=1 git -C M x" deny "$U1" "$(bash_json a1 "$W_SIB" "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.x GIT_CONFIG_VALUE_0=clean git -C $M x -ffdx")"
+check "o62 cwd=W git -c color.ui=never -C opt-future add f" allow "" "$(bash_json a1 "$W_SIB" "git -c color.ui=never -C $OF add f")"
+check "o63 cwd=W git -C opt-future add f"   allow ""  "$(bash_json a1 "$W_SIB" "git -C $OF add f")"
 # Rule 1 (no agent) denies everything the original did, cwd-relative, cd ignored.
 check "r1a cwd=M git -C /tmp commit (no agent)" deny "$R1" "$(bash_json "" "$M" "git -C /tmp commit -m x")"
 check "r1b cwd=M cd /tmp && rm a (no agent)" deny "$R1" "$(bash_json "" "$M" "cd /tmp && rm a")"
@@ -369,6 +449,12 @@ many="rm -rf"; for i in $(seq 1 400); do mkdir -p "$W_SIB/d$i"; done
 i=0; while [ ${#many} -lt 15900 ]; do i=$((i+1)); many="$many d$((i%400+1))/x$i"; done
 check "b1 $i path args in 400 dirs (conservative deny)" deny "$TL" "$(bash_json a1 "$W_SIB" "$many")"
 timed "b2 cwd=M cd W && rm ~1600 path args" either "$(bash_json a1 "$M" "cd $W_SIB && $many")"
+# Paths into a listed repo near the cap, each judged for the list and its holders.
+for i in $(seq 1 60); do mkdir -p "$OF/d$i"; done
+c="cd $OF"; i=0; while [ ${#c} -lt 15900 ]; do i=$((i+1)); c="$c && touch d$((i%60+1))/x$i"; done
+timed "b3 cwd=M cd opt-future && touch x ~1000 in 60 dirs" allow "$(bash_json a1 "$M" "$c")"
+c="rm -rf"; i=0; while [ ${#c} -lt 15900 ]; do i=$((i+1)); c="$c $OF/d$((i%60+1))/x$i"; done
+timed "b4 cwd=M rm -rf ~400 paths in opt-future" allow "$(bash_json a1 "$M" "$c")"
 # Round 2, B: cd - plus a dozen cd targets, then eval and a long cd . run.
 for i in $(seq 1 14); do mkdir -p "$tmp/d$i"; done
 c="cd -"; for i in $(seq 1 14); do c="$c; cd $tmp/d$i"; done; c="$c; eval :"
