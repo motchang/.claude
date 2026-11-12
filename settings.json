@@ -14,6 +14,11 @@
             "type": "command",
             "command": "bash \"$HOME/.claude/hooks/herdr-agent-state.sh\" session",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/herdr-report-pr.sh\"",
+            "timeout": 5
           }
         ]
       }
@@ -38,6 +43,18 @@
             "type": "command",
             "command": "bash \"$HOME/.claude/hooks/remind-grilling.sh\"",
             "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/herdr-report-pr.sh\"",
+            "timeout": 5
           }
         ]
       }
