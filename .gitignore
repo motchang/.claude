@@ -31,8 +31,6 @@
 
 # skills/ も個別に許可する。プラグインやベンダーが配布するスキルが同居している。
 !/skills/
-!/skills/mdpreview/
-!/skills/mdpreview/**
 
 # japanese-writing は k16shikano 氏の gist から取り込んだもの。frontmatter の
 # metadata に出典 URL とリビジョンを記録してある。
