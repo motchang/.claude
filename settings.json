@@ -76,7 +76,8 @@
     "document-skills@anthropic-agent-skills": true,
     "gopls-lsp@claude-plugins-official": true,
     "ruby-lsp@claude-plugins-official": true,
-    "typesafe@typesafe-ai": true
+    "typesafe@typesafe-ai": true,
+    "blueline@bluelines": true
   },
   "extraKnownMarketplaces": {
     "anthropic-agent-skills": {
@@ -90,6 +91,12 @@
         "source": "github",
         "repo": "typesafe-ai/skills"
       }
+    },
+    "bluelines": {
+      "source": {
+        "source": "github",
+        "repo": "motchang/bluelines"
+      }
     }
   },
   "feedbackDrafts": "off",
@@ -102,7 +109,8 @@
     "claude-opus-5-5": {
       "autoCompactWindow": "auto"
     },
-    "claude-opus-4-8": {}
+    "claude-opus-4-8": {},
+    "claude-fable-5-2": {}
   },
   "advisorModel": "fable",
   "tui": "fullscreen",
