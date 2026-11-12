@@ -9,31 +9,65 @@
 # (or 64 dirs / 2000 paths) any redirect or writing word is denied as too long.
 # Quoted heredoc bodies are dropped before either reading, only for allowlisted shapes
 # (cat >/tee into a literal path, gh ... "$(cat <<'D' ...)"; see strip_heredocs).
-# Opt out: ~/.claude/hooks/no-isolation-repos ("<path> [until YYYY-MM-DD]") on the cwd / file
-# dir, and on each Bash target in a listed main checkout that no unlisted one holds. The
-# list clears no target of a command (NOEX) that has the lowercase whole word clean or
-# submodule anywhere (quotes and backslashes dropped, so -m "clean up", make clean and
+# Opt out: ~/.claude/hooks/no-isolation-repos ("<path> [until YYYY-MM-DD]") or a
+# .claude/no-isolation file at a main checkout's top (a regular file named exactly so, in a
+# real .claude dir, neither a symlink). Both count on the cwd / file dir and on each Bash
+# target in an opted-out main checkout (listed, or the marker at its top) that no main
+# checkout without an opt-out holds. A cwd in a linked worktree counts by its main
+# checkout, so an agent there is let through for everything, as in the main checkout
+# itself (list and marker alike). A marker in a linked worktree alone opts nothing out, nor
+# does one beside a bare or separate git dir: from such a repo's worktrees no main top is
+# found, and none counts.
+# The opt-out clears no target of a command (NOEX) that has the lowercase whole word clean
+# or submodule anywhere (quotes and backslashes dropped, so -m "clean up", make clean and
 # submodule update lose it too), a verb or git subcommand from $ or `, or GIT_CONFIG*=.
-# Nor does it cover the listed root removed (structured reading only), a parent removed
-# that holds a main checkout of the cwd or the cd chain, or, once it has cleared a path,
-# a writing command with an unresolved target (R2U, outside a repo too). git -c alias.*/
+# Nor does it cover the opted-out root removed (structured reading only), a parent removed
+# that holds a main checkout of the cwd or the cd chain, or, once it has cleared a path, a
+# writing command with an unresolved target (R2U, outside a repo too). git -c alias.*/
 # include.*/includeIf.* (also --config-env), GIT_CONFIG*= and a git subcommand from $ or `
 # make the command an unresolved writer, read-only use too (GIT_CONFIG_GLOBAL=x git status,
 # git $v), from a cwd in any repo, agent or main thread.
 # From a guarded cwd with no agent, rule 1's original reading still refuses git subcommands
-# into a listed repo; other writers (rm, touch, redirects) into it pass, as Write does.
-# .claude/no-isolation, CLAUDE_ENFORCE_OFF=1: cwd / file dir only. Only the user may edit them.
-# Not caught: symlinks made beforehand (a file symlink is judged where the link is, not its
-# target), writers not listed (gzip, sort -o, ditto, python -c), rm -rf of a dir holding a
+# into an opted-out repo; other writers (rm, touch, redirects) into it pass, as Write does.
+# SELF refuses, in any letter case, a Bash writer whose text names the list or the marker,
+# an Edit/Write to either, and a writer whose target is the .claude dir that holds a main
+# checkout's marker (rm -rf, mv, cp -r of it). Other ways of removing a marker pass (rm of
+# a name APFS folds to it, git rm / stash -u / switch --orphan, removal from an opted-out
+# cwd): they only fail safe. CLAUDE_ENFORCE_OFF=1 turns the hook off.
+# A symlink that a writer goes through (a redirect, tee, cp's destination and, for a plain
+# cp into a dir, <dir>/<source's name>, a hard ln's source, Edit/Write, chmod without -h
+# ...; not rm, mv, unlink, ln -s's names, chmod -h) is judged at its target too: one
+# readlink -f per command resolves every such link, the whole chain as far as the kernel
+# follows it, a dangling last hop included. Over 256 links is too long. An answer that
+# does not map one line per link, or that is still a link (a loop, a chain readlink gives
+# up on), denies (R2U / R1). A glob is never expanded: a path with * ? [ ] ^ #, ~ past its
+# start, or in a command with a zsh pattern the lexer splits (a ( glued to a word or
+# opening one after a word or > / >>, <N-M>) gets no opt-out, the list and the marker
+# alike, since a link may sit among its matches. From a cwd outside the opted-out repo this
+# denies what HEAD let through, failing safe: ( in quotes or comments (-m "feat(api): x",
+# # note (x)), if (true), tee >(cat), and names like L/a[1].txt, L/new~, L/v<1-2>.
+# ln -s reads a relative target from the link's dir as well as from the cwd. So a link
+# brought in from outside (mv, cp -R / -P, tar -x) is caught when written through, not
+# when it arrives.
+# Not caught, links: a glob write into W or any unexempt dir through a link there (W/l? ->
+# M, as on HEAD), a link made earlier in the same command, a write through a hard link
+# that already exists (it looks like a plain file), `link SRC DST` (not a known
+# writer, as on HEAD), and a zsh (…) glob after >| >>| &>| 1>| (cd M && echo pwn >|
+# (f|x) from W, as on HEAD, marker or not).
+# Not caught: writers not listed (gzip, sort -o, ditto, python -c), rm -rf of a
 # main checkout given as a direct path when that checkout is not the cwd's or on the cd
-# chain (so a repo nested in a listed one, removed with its parent dir), GIT_* values
+# chain (so a repo nested in an opted-out one, removed with its parent dir), GIT_* values
 # resolved against the cd base instead of the -C dir (cd D && GIT_WORK_TREE=../M git -C L
 # checkout), git's env set without a GIT_*= word (printf -v, read <<<), opaque
-# `x=$y; rm -rf <listed root>`, a git subcommand from a brace or glob (cl{ean,}, cl?an,
-# {checkout,}), printf -v GIT_CONFIG_PARAMETERS, aliases from config files (also HOME=
-# another .gitconfig, git config alias.x clean then git x), --exec-path=<dir>, the script
-# run by bash -c / sh -c (bash -c 'git -C M clean -ffdx' passes; only ; & | ( inside it
-# split off pieces that are judged), a script built at run time (bash -c "$s").
+# `x=$y; rm -rf <opted-out root>` (also git -C <root>/inner/.. add -A), a git subcommand
+# from a brace or glob (cl{ean,}, cl?an, {checkout,}), printf -v GIT_CONFIG_PARAMETERS,
+# aliases from config files (also HOME= another .gitconfig, git config alias.x clean then
+# git x), --exec-path=<dir>, the script run by bash -c / sh -c (bash -c 'git -C M clean
+# -ffdx' passes; only ; & | ( inside it split off pieces that are judged), a script built
+# at run time (bash -c "$s"). A marker made at a main checkout's top through a path not
+# followed (a name built from a variable from a cwd outside every repo, a writer not
+# listed) counts from the next command on, for cwds in that checkout and its worktrees
+# and as a target from any cwd.
 set -uo pipefail
 set -f   # no globbing: arguments are inspected as written, never expanded
 export LC_ALL=C
@@ -64,7 +98,7 @@ hint="※読み取りのつもりで拒否された場合は誤検知の可能�
 R1="リポジトリ内のファイル変更はメインスレッドから直接実行できません。Agent ツールでサブエージェントに委譲してください（例: Agent(subagent_type:\"general-purpose\", isolation:\"worktree\")）。読み取り・検索・ビルド・テストはメインスレッドで可。どうしても直接やる必要があるなら、ユーザーに CLAUDE_ENFORCE_OFF=1 での起動を依頼してください。$hint"
 R2="メインチェックアウトは変更できません。git worktree 内で作業してください。Agent は isolation:\"worktree\" で起動する、またはセッション側で EnterWorktree / claude --worktree を使ってください。$hint"
 R2U="メインチェックアウトを変更しないことを確認できません（変数・cd -・pushd・ブレース展開などで行き先が決まらない）。リテラルな絶対パスで書き直してください。$hint"
-LONG="コマンドが長すぎて判定できません（16384 文字・64 ディレクトリ・2000 パス・1 コマンド 64 語位置のいずれかを超えた）。分割してください。"
+LONG="コマンドが長すぎて判定できません（16384 文字・64 ディレクトリ・2000 パス・256 シンボリックリンク・1 コマンド 64 語位置のいずれかを超えた）。分割してください。"
 SELF="オプトアウトの指定（.claude/no-isolation と ~/.claude/hooks/no-isolation-repos）はユーザーだけが編集できます。必要ならユーザーに編集を依頼してください。"
 
 # mut_ev <cmd>: quotes and backslashes dropped, any redirect (bar /dev/null and fd dups)
@@ -103,15 +137,20 @@ joinp() { case $2 in /*) JP=$2;; '~') JP=$HOME;; '~/'*) JP=$HOME/${2#'~/'};; *) 
 lexnorm() { local IFS=/ p o=""; for p in $1; do case $p in ''|.) ;; ..) o=${o%/*};; *) o=$o/$p;; esac; done; LEX=${o:-/}; }
 
 # add_path <word> <base> <destructive>: queue a path for the batch check. A glob is cut
-# back to the directory it expands in; what cannot be read literally sets UNRES.
-PS=(); PD=(); UNRES=0; GENV=()
+# back to the directory it expands in and is never expanded here. Its matches are unknown
+# (a link among them, zsh's ** and (a|b), the shell's locale), so a globbed path gets no
+# opt-out (PX=1): * ? [ ] ^ #, ~ past the start, or NXC for the whole command (zsh
+# patterns the lexer splits, below). What cannot be read literally sets UNRES.
+PS=(); PD=(); PF=(); PX=(); FOLLOW=1; UNRES=0; GENV=(); NXC=0
 add_path() {
-  local w=$1
+  local w=$1 x=$NXC
   [ ${#PS[@]} -ge 2000 ] && { TOO_MANY=1; return; }
   case $w in ''|'{}'|*://*) return;; *'$'*|*'`'*|'~'[!/]*|*'{'*,*'}'*|*'{'*..*'}'*) UNRES=1; return;; esac
+  case $w in *[]*?[^#]*) x=1;; esac
+  case ${w#'~'} in *'~'*) x=1;; esac
   case $w in *[*?[{]*) w=${w%%[*?[{]*}; case $w in */*) w=${w%/*}/;; *) w=.;; esac;; esac
-  case $w in '~'*) PS+=("$2/$w"); PD+=("$3");; esac
-  joinp "$2" "$w"; PS+=("$JP"); PD+=("$3")
+  case $w in '~'*) PS+=("$2/$w"); PD+=("$3"); PF+=("$FOLLOW"); PX+=("$x");; esac
+  joinp "$2" "$w"; PS+=("$JP"); PD+=("$3"); PF+=("$FOLLOW"); PX+=("$x")
 }
 pathy() { case $1 in /*|*/*|.|..|'~'*) return 0;; esac; return 1; }
 
@@ -128,8 +167,8 @@ git_verb() {
   local k=$1 j w v b cur mut=0 hadc out=0
   sub_after "$k"; local si=$SUBI
   # clean -x and submodule (foreach, deinit) reach nested repos no target lookup sees;
-  # such a command gets no help from the opt-out list (NOEX; the word scan before the
-  # resolve loop also catches them). A subcommand from a variable could be anything: an
+  # such a command gets no help from the opt-out (NOEX; the word scan in can_ex
+  # also catches them). A subcommand from a variable could be anything: an
   # unresolved writer.
   case $SUB in clean|submodule) NOEX=1;; *'$'*|*'`'*) MUT=1; UNRES=1; NOEX=1;; esac
   # An alias (or an included config file) set on the command line makes any subcommand
@@ -198,11 +237,16 @@ judge_verb() {
   MUT=1
   for w in ${GENV[@]+"${GENV[@]}"}; do each_base "$w" 0; done
   if [ $cls = file ]; then
+    # These act on a link itself, not through it (rm, mv, ln's names, chmod -h ...).
+    case $v in rm|rmdir|unlink|mv|ln|find|rimraf) FOLLOW=0;;
+      chmod|chown|chgrp) has_after "$k" '-h' '-[!-]*h*' && FOLLOW=0;; esac
     for ((j=k+1; j<NW; j++)); do w=${WORDS[j]}
       case $w in --*=*|[A-Za-z_]*=*) w=${w#*=};;
         -*) case $v$w in curl-o?*|wget-[OP]?*) w=${w#-?};; *) continue;; esac;; esac   # -o<path>
       any=1; each_base "$w" "$des"
     done
+    case $v in ln) ln_rel "$k";; cp) cp_dest "$k";; esac
+    FOLLOW=1
     [ $any = 1 ] && return 0
   fi
   each_base . 0
@@ -217,10 +261,62 @@ judge_verb() {
   done
 }
 
+# dest_ops <k>: the operands of word k's command (OPS) and its destination (D: -t, else
+# the last of two or more operands); OPS keeps the sources only (NS of them).
+dest_ops() {
+  local j w
+  D=""; OPS=(); HARD=1
+  for ((j=$1+1; j<NW; j++)); do w=${WORDS[j]}
+    case $w in -t) j=$((j+1)); D=${WORDS[j]-};; -t?*) D=${w#-t};; --target-directory=*) D=${w#*=};;
+      --symbolic) HARD=0;; --*) ;; -*s*) HARD=0;; -*) ;; *) OPS+=("$w");; esac
+  done
+  NS=${#OPS[@]}
+  if [ -z "$D" ] && [ $NS -ge 2 ]; then NS=$((NS-1)); D=${OPS[NS]}; fi
+}
+# cp_dest <k>: cp into a directory writes <dir>/<source's name>, through a link of that
+# name if one is there (cp out/lf K/ with K/lf -> ../M/f rewrites M/f). Each source's
+# name is queued under the destination as a followed path; if the destination is a file
+# the extra path only re-checks its dir. A source whose name is a glob queues the glob
+# there, and one ending in / (its contents) queues <dest>/*: globbed, so the destination
+# gets no opt-out.
+# cp -R / -r / -a refuse to write through a link at the destination (macOS cp), so a
+# recursive copy queues nothing more; mv and install replace the link.
+cp_dest() {
+  local j t
+  for ((j=$1+1; j<NW; j++)); do case ${WORDS[j]} in --recursive|--archive|-[!-]*[Rra]*|-[Rra]) return 0;; esac; done
+  dest_ops "$1"; [ -n "$D" ] || return 0
+  FOLLOW=1
+  for ((j=0; j<NS; j++)); do t=${OPS[j]}
+    case $t in */) t='*';; *) t=${t##*/};; esac
+    case $t in ''|.|..) t='*';; esac
+    each_base "${D%/}/$t" 0
+  done
+}
+# ln_rel <k>: a relative link target is read from the link's directory, not from the
+# cwd: `cd out && ln -s ../M/f K/lf` points K/lf at M/f. Each target operand is also
+# queued against the destination (the last operand, or -t) and against its parent, since
+# either may be the link's directory. A hard link (no -s) is made to the file a source
+# link points to (macOS ln follows it): each source is queued again as a followed path,
+# so `ln K/lf W/h` with K/lf -> ../M/f is judged at M/f.
+ln_rel() {
+  local j t n
+  dest_ops "$1"; n=$NS
+  if [ $HARD = 1 ]; then
+    FOLLOW=1; for ((j=0; j<n; j++)); do each_base "${OPS[j]}" 0; done
+    return 0
+  fi
+  [ -n "$D" ] || return 0
+  for ((j=0; j<n; j++)); do t=${OPS[j]}
+    case $t in /*|'~'*) continue;; esac
+    each_base "$D/$t" 0
+    case $D in */*) each_base "${D%/*}/$t" 0;; esac
+  done
+}
+
 # judge_seg: WORDS/REDS of one simple command, against every dir in BASES.
 judge_seg() {
   local i=0 k wp=-1 r w pos
-  NW=${#WORDS[@]}
+  NW=${#WORDS[@]}; FOLLOW=1
   for r in ${REDS[@]+"${REDS[@]}"}; do case $r in /dev/*) continue;; esac; MUT=1; each_base "$r" 0; done
   # GIT_* anywhere (VAR=, export, declare, env) counts for the rest of the command.
   # Config from the environment can define an alias: a writer to a place not followed.
@@ -265,7 +361,8 @@ scan() {
       '|') flush; nx=${s:i+1:1}
         case $nx in '|') i=$((i+1)); TOK+=('||');; '&') i=$((i+1)); TOK+=('|');; *) TOK+=('|');; esac; TYP+=(o);;
       $'\n'|';') flush; pend=""; TOK+=(';'); TYP+=(o);;
-      '('|')') flush; pend=""; TOK+=("$c"); TYP+=(o);;
+      '('|')') flush; [ -n "$pend" ] && return 1   # > (a|b): a zsh glob as the target
+        TOK+=("$c"); TYP+=(o);;
       *) w+=$c; inw=1;;
     esac
     i=$((i+1))
@@ -324,7 +421,7 @@ structured() {
 # ------------------------------------------------------------ opaque mode
 
 opaque() {
-  MODE=opaque; PS=(); PD=(); UNRES=0; MUT=0; GENV=()
+  MODE=opaque; PS=(); PD=(); PF=(); PX=(); UNRES=0; MUT=0; GENV=()
   local norm line k t b r i new=0 CDT=() SEGS=()
   # Read the command both with backslash-newline joined and as written, quotes and
   # backslashes dropped: whichever reading the shell uses is covered.
@@ -333,6 +430,9 @@ opaque() {
   REDS=()
   while IFS= read -r r; do [ -n "$r" ] && REDS+=("$r"); done < <(printf '%s\n' "$norm" | sed -E 's/[0-9]*[<>]&[0-9-]+//g' \
     | grep -oE '[0-9]*>>?[|&]?[[:space:]]*[^[:space:];&|()<>]+' | sed -E 's/^[0-9]*>>?[|&]?[[:space:]]*//')
+  # > (lf|x) is a zsh glob in the cwd that the pattern above drops: queue * in its place.
+  local re_rp='>[[:space:]]*\('
+  [[ $norm =~ $re_rp ]] && REDS+=('*')
   # Redirect targets stop at an operator, so `>/dev/null; rm x` keeps its rm.
   while IFS= read -r line; do case $line in *[![:space:]]*) SEGS+=("$line");; esac; done < <(printf '%s\n' "$norm" \
     | sed -E 's/[0-9]*(>>?|<<?|<)[|&]?[[:space:]]*[^[:space:];&|()<>]*//g' | tr ';|&(){}`' '\n\n\n\n\n\n\n\n')
@@ -482,16 +582,47 @@ strip_heredocs() {
 
 # ------------------------------------------------------------ guard
 
-# The opt-out markers are the user's to edit, whoever asks and from wherever. (Coarse
+# Creating or naming an opt-out file in a writer is the user's alone, whoever asks and from
+# wherever; other removals pass and only fail safe (header). (Coarse
 # on Bash: any command naming one with a writing word, e.g. git log -- .claude/no-isolation.)
+# Matched in lower case: APFS finds .claude/NO-ISOLATION when asked for the marker.
 if [ "$tool" = Bash ]; then
-  case $(printf '%s' "$cmd_raw" | tr -d "\\\\\"'") in *no-isolation*) mut_ev "$cmd_raw" && deny "$SELF";; esac
+  case $(printf '%s' "$cmd_raw" | tr -d "\\\\\"'" | tr '[:upper:]' '[:lower:]') in *no-isolation*) mut_ev "$cmd_raw" && deny "$SELF";; esac
 else
-  lexnorm "$ap"; case $LEX in */.claude/no-isolation|*/hooks/no-isolation-repos) deny "$SELF";; esac
+  lexnorm "$ap"; case $(printf '%s' "$LEX" | tr '[:upper:]' '[:lower:]') in */.claude/no-isolation|*/hooks/no-isolation-repos) deny "$SELF";; esac
 fi
+# has_marker <top>: .claude is a real directory there and the marker a regular file, neither
+# a symlink, so a marker cannot be switched on by writing a file outside the repo. The entry
+# must be named no-isolation byte for byte: APFS finds NO-ISOLATION, or no-iſolation (U+017F
+# folds to s), when asked for the marker, and SELF does not see the latter. The bracket makes
+# the shell read the directory and match the stored name byte for byte (C locale); the
+# quoted top is taken literally.
+has_marker() {
+  [ -d "$1/.claude" ] && [ ! -L "$1/.claude" ] && [ -f "$1/.claude/no-isolation" ] && [ ! -L "$1/.claude/no-isolation" ] || return 1
+  local t="$1/.claude/no-isolation"
+  set +f; set -- "$1"/.claude/no-isolatio[n]; set -f
+  [ $# = 1 ] && [ "$1" = "$t" ]
+}
+# main_of: after info, MT is the main checkout's top when one can be found: the dir's own
+# for a main checkout; for a linked worktree, the parent of the common dir only when that
+# is <top>/.git. A bare repo, or one whose git dir lives apart (--separate-git-dir), has no
+# main top a worktree can find (git keeps no pointer back), so MT stays empty there --
+# unless that git dir is itself named .git (a bare repo at proj/.git, a separate one at
+# sep/foo/.git): then MT is proj or sep/foo, and a marker there counts. Only the user, or a
+# writer the hook does not follow, can place one there (SELF refuses naming it).
+main_of() { MT=""; if [ "$IM" = 1 ]; then MT=$IMT; else case $IMC in */.git) MT=${IMC%/.git};; esac; fi; }
 
 dir=$cwd
-[ -n "$path" ] && dir=$(dirname "$ap")
+# Edit/Write through a symlink to a file writes the link's target: its dir is the one that
+# counts (the resolve below follows the link too).
+if [ -n "$path" ]; then
+  fp=$ap
+  if [ -L "$fp" ] && [ ! -d "$fp" ]; then
+    fp=$(/usr/bin/readlink -f -- "$ap" 2>/dev/null)
+    case $fp in /*) ;; *) [ -n "$agent" ] && deny "$R2U"; deny "$R1";; esac
+  fi
+  dir=$(dirname "$fp")
+fi
 if [ ! -d "$dir" ]; then   # new dirs: the nearest existing parent, read lexically, if in a repo
   lexnorm "$dir"; dir=$LEX; while [ ! -d "$dir" ]; do dir=${dir%/*}; dir=${dir:-/}; done
   git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1 || dir=$cwd
@@ -500,7 +631,10 @@ fi
 # Outside any work tree only a path into a main checkout is refused (Bash only).
 INREPO=1; git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1 || { [ "$tool" = Bash ] || allow; INREPO=0; }
 top=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)
-[ -n "$top" ] && [ -f "$top/.claude/no-isolation" ] && allow
+# The marker counts at the main checkout's top only (main_of). One that exists in a
+# worktree alone opts nothing out: else an agent could copy a marker there (tar, cp -r of
+# a marked root) and free its own cwd.
+if [ -n "$top" ]; then info "$dir"; main_of; [ -n "$MT" ] && has_marker "$MT" && allow; fi
 
 # Global opt-out list, kept outside any repo so it needs no in-repo marker file.
 # A line may carry an expiry — "<path> until YYYY-MM-DD" — and stops matching
@@ -528,7 +662,21 @@ if [ -n "$top" ] && [ ${#EX[@]} -gt 0 ]; then
   main_top=${common_root%/.git}
   for line in "${EX[@]}"; do [ "$line" = "$top" ] || [ "$line" = "$main_top" ] && allow; done
 fi
-is_exempt() { local e; for e in ${EX[@]+"${EX[@]}"}; do [ "$e" = "$1" ] && return 0; done; return 1; }
+is_listed() { local e; for e in ${EX[@]+"${EX[@]}"}; do [ "$e" = "$1" ] && return 0; done; return 1; }
+# is_exempt <main top>: listed, or the .claude/no-isolation marker at its top (has_marker).
+# Only a main checkout's top counts, here as for the cwd above; paths into a linked
+# worktree are judged as before. Cached per top; XMK is set when the marker is there
+# (is_marked).
+XK=(); XV=(); XM=(); XMK=0
+is_exempt() {
+  local i v=1 m=0
+  XMK=0; [ -n "$1" ] || return 1
+  for ((i=0; i<${#XK[@]}; i++)); do [ "${XK[i]}" = "$1" ] && { XMK=${XM[i]}; return "${XV[i]}"; }; done
+  has_marker "$1" && m=1
+  if [ $m = 1 ] || is_listed "$1"; then v=0; fi
+  XK+=("$1"); XV+=("$v"); XM+=("$m"); XMK=$m; return $v
+}
+is_marked() { is_exempt "$1"; [ $XMK = 1 ]; }
 
 pdir=$(cd -P -- "$dir" 2>/dev/null && pwd -P) || pdir=$dir
 
@@ -536,15 +684,30 @@ if [ "$tool" = "Bash" ]; then
   # Cap first, before anything that grows faster than the input.
   if [ ${#cmd_raw} -gt 16384 ]; then mut_ev "$cmd_raw" && deny "$LONG"; allow; fi
   case $cmd in *'<<'*) strip_heredocs;; esac   # bodies of allowlisted quoted heredocs
+  # zsh patterns the lexer splits at ( | < >: K/l(f|x), K/(a|b), K/l<->, K/l<1-9>. A ( glued
+  # to a word (not $( <( >( =() or <N-M> anywhere bars the opt-out for every path (NXC).
+  # So does a ( that opens a word after a redirect (> (lf|x), >(...) too) or after another
+  # word (tee (lf|x)); bash rejects both, zsh globs them.
+  re_nx='[^[:space:];&|$<>=(]\(|<[0-9]*-[0-9]*>|>[[:space:]]*\(|[^[:space:];&|<>(][[:space:]]+\('
+  [[ $cmd =~ $re_nx ]] && NXC=1
   MODE=structured; MUT=0; NOEX=0
   case $cmd in *[\\\$\`]*|*'<<'*) opaque;; *) structured || opaque;; esac
 else
   # Rule 2: the nearest existing parent of file_path, as written and normalized (batch_resolve).
-  PS=("${ap:-$pdir}"); PD=(0); MUT=1; UNRES=0
+  PS=("${ap:-$pdir}"); PD=(0); PF=(1); PX=(0); MUT=1; UNRES=0
 fi
 
+# A write through a symlink to a file lands at its target, which may sit in a guarded
+# checkout (a link made earlier, or brought in by tar -x, mv, cp -R, git checkout, an
+# unlisted writer). Each such link a writer goes through (PF=1: not rm, mv, ln's names,
+# chmod -h) is collected, and all of them are resolved by one readlink -f, which follows
+# the chain as far as the kernel does (and further) and resolves a dangling last hop to
+# the path a write would create. A directory symlink is already followed by cd -P. Over
+# 256 distinct links: !LONG. An answer that does not map one line per link, or that is
+# still a link (a loop, a chain longer than readlink follows): !UNRES. Each line carries
+# PX: 1 bars the opt-out for that path.
 batch_resolve() {
-  local i p d self
+  local i p d self LK=() n r IFS=$'\n'
   for ((i=0; i<${#PS[@]}; i++)); do
     LEX=""
     case ${PS[i]} in */.|*/./*|*/..|*/../*) lexnorm "${PS[i]}";; esac
@@ -552,8 +715,24 @@ batch_resolve() {
       while [ ${#p} -gt 1 ] && [ "${p%/}" != "$p" ]; do p=${p%/}; done
       d=$p; self=1
       until cd -P -- "$d" 2>/dev/null; do self=0; d=${d%/*}; [ -n "$d" ] || d=/; done
-      printf '%s\t%s\t%s\n' "$PWD" "$self" "${PD[i]}"
+      printf '%s\t%s\t%s\t%s\n' "$PWD" "$self" "${PD[i]}" "${PX[i]}"
+      [ $self = 0 ] && [ "${PF[i]}" = 1 ] && [ -L "$p" ] && LK+=("$p")
     done
+  done
+  [ ${#LK[@]} -gt 0 ] || return 0
+  for p in "${LK[@]}"; do case $p in *$'\n'*) printf '!UNRES\n'; return;; esac; done
+  LK=($(printf '%s\n' "${LK[@]}" | sort -u))   # IFS is a newline here
+  n=${#LK[@]}
+  [ $n -gt 256 ] && { printf '!LONG\n'; return; }
+  r=$(/usr/bin/readlink -f -- "${LK[@]}" 2>/dev/null)
+  LK=($r)
+  [ ${#LK[@]} = $n ] || { printf '!UNRES\n'; return; }
+  for p in "${LK[@]}"; do
+    case $p in /*) ;; *) printf '!UNRES\n'; continue;; esac
+    [ -L "$p" ] && { printf '!UNRES\n'; continue; }
+    d=$p; self=1
+    until cd -P -- "$d" 2>/dev/null; do self=0; d=${d%/*}; [ -n "$d" ] || d=/; done
+    printf '%s\t%s\t0\t0\n' "$PWD" "$self"   # removing a link leaves its target: des 0
   done
 }
 # ------------------------------------------- rule 1 exactly as the original judged it
@@ -656,10 +835,13 @@ orig_r1() {
 
 # Resolve every queued path in one subshell: the nearest existing directory (physical),
 # for the path as written and lexically normalized, and whether the path itself exists.
-info "$pdir"; CWD_C=$IMC; MAINS=("$IMT")
-for b in ${BASES[@]+"${BASES[@]}"}; do info "$b"; MAINS+=("$IMT"); done
+# MAINS: the main checkout top of the cwd and of each base, for the parent-removal rule;
+# MOK: that top as main_of finds it (empty for a bare or separate-git-dir worktree), the
+# only one the opt-out may clear.
+info "$pdir"; CWD_C=$IMC; MAINS=("$IMT"); main_of; MOK=("$MT")
+for b in ${BASES[@]+"${BASES[@]}"}; do info "$b"; MAINS+=("$IMT"); main_of; MOK+=("$MT"); done
 HOMEP=$(cd -P -- "$HOME" 2>/dev/null && pwd -P) || HOMEP=$HOME
-# ex_main <main top>: it is listed, and so is every main checkout that holds it (a write
+# ex_main <main top>: it is opted out, and so is every main checkout that holds it (a write
 # into a repo nested in M changes M's checkout). The walk stops at a linked worktree or
 # outside any repo. A lookup over the 64-dir cap counts as not exempt.
 ex_main() {
@@ -673,25 +855,41 @@ ex_main() {
   done
   return 1
 }
-# The word scan behind NOEX, coarse on purpose: clean or submodule anywhere, in either
-# reading with quotes and backslashes dropped (quoted text such as -m "clean up" counts).
-if [ "$tool" = Bash ] && [ ${#EX[@]} -gt 0 ] && [ "${NOEX-0}" = 0 ]; then
-  { printf '%s' "$cmd" | sed -e ':a' -e '/\\$/{' -e 'N' -e 's/\\\n//' -e 'ba' -e '}'; printf '\n'; printf '%s' "$cmd"; } \
-    | tr -d "\\\\\"'" | grep -E '(^|[^[:alnum:]_])(clean|submodule)([^[:alnum:]_]|$)' >/dev/null && NOEX=1
-fi
-HIT=0; R1HIT=0; EXU=0   # EXU: the list cleared a path that would have hit
+# can_ex <main top>: the opt-out may clear a path into it. The word scan behind NOEX,
+# coarse on purpose (clean or submodule anywhere, in either reading with quotes and
+# backslashes dropped, so -m "clean up" counts), runs once, before the first path is
+# cleared: only commands that touch an opted-out main checkout pay for it.
+SCANNED=0
+can_ex() {
+  [ "${NOEX-0}" = 0 ] && is_exempt "$1" || return 1
+  if [ $SCANNED = 0 ] && [ "$tool" = Bash ]; then
+    SCANNED=1
+    { printf '%s' "$cmd" | sed -e ':a' -e '/\\$/{' -e 'N' -e 's/\\\n//' -e 'ba' -e '}'; printf '\n'; printf '%s' "$cmd"; } \
+      | tr -d "\\\\\"'" | grep -E '(^|[^[:alnum:]_])(clean|submodule)([^[:alnum:]_]|$)' >/dev/null && NOEX=1
+  fi
+  [ "${NOEX-0}" = 0 ]
+}
+HIT=0; R1HIT=0; EXU=0   # EXU: the opt-out cleared a path that would have hit
+MKHIT=0; LNKU=0
 if [ ${#PS[@]} -gt 0 ] && [ $TOO_MANY = 0 ]; then
-  while IFS=$'\t' read -r L self des; do
+  while IFS=$'\t' read -r L self des nx; do
     [ -n "$L" ] || continue
+    case $L in '!LONG') TOO_MANY=1; break;; '!UNRES') LNKU=1; continue;; esac
     info "$L"; [ $TOO_MANY = 1 ] && break
+    # The .claude dir holding a main checkout's marker is the user's too: any writer naming
+    # it (rm -rf, mv away and back, cp -r it elsewhere) is refused as SELF. Files under it
+    # are judged as usual. -ef and the case pattern: APFS ignores case, PWD keeps it.
+    [ "$self" = 1 ] && [ "$IM" = 1 ] && case ${L##*/} in [.][cC][lL][aA][uU][dD][eE])
+      [ "${L%/*}" -ef "$IMT" ] && is_marked "$IMT" && MKHIT=1;; esac
     # A path into an opted-out main checkout is judged as one outside any repo, except
-    # that removing the checkout itself is still refused (below, and via MAINS).
-    et=""; [ "$IM" = 1 ] && [ "${NOEX-0}" = 0 ] && is_exempt "$IMT" && et=$IMT
+    # that removing the checkout itself is still refused (below, and via MAINS). A globbed
+    # path (nx=1) gets no opt-out: it is judged as if neither the list nor the marker held.
+    et=""; [ "$nx" != 1 ] && [ "$IM" = 1 ] && can_ex "$IMT" && et=$IMT
     if [ -n "$et" ] && ex_main "$et"; then
       EXU=1
       # Only the structured reading knows the verb on L is destructive; the opaque one
       # marks every path word so, cd and -C operands too.
-      [ "$des" = 1 ] && [ "$self" = 1 ] && [ "$L" = "$et" ] && [ "${MODE-}" = structured ] && HIT=1
+      [ "$des" = 1 ] && [ "$self" = 1 ] && [ "$L" -ef "$et" ] && [ "${MODE-}" = structured ] && HIT=1
     else
       [ $TOO_MANY = 1 ] && break
       [ -n "$et" ] && info "$L"   # ex_main moved IM/IMT/IMC to a parent
@@ -701,17 +899,20 @@ if [ ${#PS[@]} -gt 0 ] && [ $TOO_MANY = 0 ]; then
     fi
     if [ "$des" = 1 ] && [ "$self" = 1 ]; then
       [ "$L" = / ] || [ "$L" = "$HOMEP" ] && HIT=1
-      for m in "${MAINS[@]}"; do [ -n "$m" ] && case $m/ in "$L"/*)   # a listed m itself: above
-        [ "$L" = "$m" ] && [ "${NOEX-0}" = 0 ] && is_exempt "$m" && { EXU=1; continue; }; HIT=1;; esac; done
+      for ((j=0; j<${#MAINS[@]}; j++)); do m=${MAINS[j]}; [ -n "$m" ] && case $m/ in "$L"/*)   # an opted-out m itself: above
+        [ "$nx" != 1 ] && [ "$L" = "$m" ] && [ "${MOK[j]}" = "$m" ] && can_ex "$m" && { EXU=1; continue; }; HIT=1;; esac; done
     fi
   done < <(batch_resolve | sort -u)
 fi
 
+[ $MKHIT = 1 ] && deny "$SELF"
+# A link a writer goes through whose target could not be read: fail closed.
+[ $LNKU = 1 ] && { [ -n "$agent" ] && deny "$R2U"; deny "$R1"; }
 [ $TOO_MANY = 1 ] && deny "$LONG"
 if [ $INREPO = 0 ]; then
   [ $HIT = 1 ] && { [ -n "$agent" ] && deny "$R2"; deny "$R1"; }
-  # Out of any repo an unresolved target is let through, unless the list cleared a path:
-  # the variable could name the main checkout the listed one sits beside.
+  # Out of any repo an unresolved target is let through, unless the opt-out cleared a path:
+  # the variable could name the main checkout the opted-out one sits beside.
   [ $EXU = 1 ] && [ $MUT = 1 ] && [ $UNRES = 1 ] && { [ -n "$agent" ] && deny "$R2U"; deny "$R1"; }
   allow
 fi

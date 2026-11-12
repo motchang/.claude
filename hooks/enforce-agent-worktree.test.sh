@@ -37,17 +37,69 @@ chmod 600 "$tmp/noperm"
 # so the real list cannot change the outcome, and use it for opt-out cases.
 # opt-future/inner is an unlisted repo inside a listed one; outer/ex a listed repo
 # inside an unlisted one.
-for r in opt-past opt-future opt-marker opt-future/inner outer outer/ex; do
+# Marker fixtures, same shapes: opt-marker/inner unmarked in a marked repo, mko/mk marked
+# in an unmarked one, opt-future/mk marked in a listed one, opt-marker/lst listed in a
+# marked one; dirmk has a directory where the marker would be, deep a marker below its
+# top (deep/sub), and mw a marker only at the top of its linked worktree mww. cm has the
+# marker committed, so its worktree cmw holds one too; omw is a worktree of opt-marker.
+for r in opt-past opt-future opt-marker opt-future/inner outer outer/ex \
+         opt-marker/inner opt-marker/lst mko mko/mk opt-future/mk dirmk deep mw cm; do
   g init -q "$tmp/$r"; g -C "$tmp/$r" commit -q --allow-empty -m i
 done
-mkdir -p "$tmp/home/.claude/hooks" "$tmp/opt-marker/.claude" "$tmp/opt-future/sub"
-touch "$tmp/opt-marker/.claude/no-isolation"
+MKF=.claude/no-isolation
+mkdir -p "$tmp/cm/.claude"; touch "$tmp/cm/$MKF"; g -C "$tmp/cm" add "$MKF"; g -C "$tmp/cm" commit -q -m m
+g -C "$tmp/mw" worktree add -q -b w "$tmp/mww" 2>/dev/null
+g -C "$tmp/cm" worktree add -q -b w "$tmp/cmw" 2>/dev/null
+g -C "$tmp/opt-marker" worktree add -q -b w "$tmp/omw" 2>/dev/null
+mkdir -p "$tmp/home/.claude/hooks" "$tmp/opt-future/sub" "$tmp/opt-marker/sub" "$tmp/dirmk/$MKF" "$tmp/deep/sub/.claude"
+for r in opt-marker mko/mk opt-future/mk deep/sub mww; do mkdir -p "$tmp/$r/.claude"; touch "$tmp/$r/$MKF"; done
+# Symlinks: sl1's .claude points out of the repo at a dir holding a marker; sl2's marker
+# is a symlink to a file outside. Neither counts, on the cwd or as a target.
+for r in sl1 sl2; do g init -q "$tmp/$r"; g -C "$tmp/$r" commit -q --allow-empty -m i; done
+mkdir -p "$tmp/shared/cfg" "$tmp/sl2/.claude"; touch "$tmp/shared/cfg/${MKF#*/}" "$tmp/shared/f"
+ln -s "$tmp/shared/cfg" "$tmp/sl1/.claude"; ln -s "$tmp/shared/f" "$tmp/sl2/$MKF"
+touch "$tmp/opt-marker/.claude/settings.json"
+# Layouts with no main top a worktree can find: a bare repo's worktree bare/wt1, and sgw, a
+# worktree of sg whose git dir is sep/sg.git. Markers sit beside the git dirs (bare/,
+# sep/: outside any checkout) and at every checkout top, as a committed one would.
+g init -q "$tmp/bsrc"; g -C "$tmp/bsrc" commit -q --allow-empty -m i
+g clone -q --bare "$tmp/bsrc" "$tmp/bare/repo.git" 2>/dev/null
+g -C "$tmp/bare/repo.git" worktree add -q "$tmp/bare/wt1" 2>/dev/null
+mkdir -p "$tmp/sep"; g init -q --separate-git-dir "$tmp/sep/sg.git" "$tmp/sg"; g -C "$tmp/sg" commit -q --allow-empty -m i
+g -C "$tmp/sg" worktree add -q -b w "$tmp/sgw" 2>/dev/null
+for r in bare bare/wt1 sep sg sgw; do mkdir -p "$tmp/$r/.claude"; touch "$tmp/$r/$MKF"; done
+# Names APFS takes for the marker's: fold1 has no-iſolation (U+017F), fold2 the upper case.
+for r in fold1 fold2; do g init -q "$tmp/$r"; g -C "$tmp/$r" commit -q --allow-empty -m i; mkdir -p "$tmp/$r/.claude"; done
+touch "$tmp/fold1/.claude/no-i$(printf '\305\277')olation" "$tmp/fold2/.claude/NO-ISOLATION"
+# Symlinks into M placed earlier in a marked and in a listed repo (relative, dangling),
+# and one inside the marked repo pointing within it.
+ln -s ../main/f "$tmp/opt-marker/lf"; ln -s ../main/f "$tmp/opt-future/lf"; ln -s sub "$tmp/opt-marker/ls"
+ln -s ../../main/f "$tmp/opt-marker/sub/lf0"; ln -s lf0 "$tmp/opt-marker/sub/lf1"
+mkdir -p "$tmp/o2/d"   # ../main from here is not M
+MK0=$tmp/opt-marker
+# Chains into M: c1..c10 (10 links) and hc/h1..h31 (31) in MK, k1 -> k2 -> h1 (33, past
+# the kernel's 32: the write fails there, the hook denies anyway); lw in W points into M;
+# q1..q9 -> qf in W is a legit chain; many2 holds 260 links outside any repo.
+for i in $(seq 1 9); do ln -s "c$((i+1))" "$MK0/c$i"; done; ln -s ../main/f "$MK0/c10"
+mkdir -p "$MK0/hc"; for i in $(seq 1 30); do ln -s "h$((i+1))" "$MK0/hc/h$i"; done; ln -s ../../main/f "$MK0/hc/h31"
+ln -s k2 "$MK0/hc/k1"; ln -s h1 "$MK0/hc/k2"
+ln -s ../main/f "$W_SIB/lw"; touch "$W_SIB/qf"; for i in $(seq 1 8); do ln -s "q$((i+1))" "$W_SIB/q$i"; done; ln -s qf "$W_SIB/q9"
+mkdir -p "$tmp/many2"; for i in $(seq 1 260); do ln -s x "$tmp/many2/l$i"; done
+# MK/g/ld is a dir link into M, la <-> lb a loop; W/ldang dangles within W; out/q holds
+# plain files to copy, out/zz links to M/f outside any repo (a hard link source).
+mkdir -p "$MK0/g" "$tmp/out/q"; ln -s ../../main "$MK0/g/ld"; ln -s lb "$MK0/g/la"; ln -s la "$MK0/g/lb"
+ln -s newfile "$W_SIB/ldang"; echo x > "$tmp/out/q/lf"; echo x > "$tmp/out/q/ok"; ln -s ../main/f "$tmp/out/zz"
+ln -s ../main/f "$MK0/zé"   # one character in UTF-8, two bytes in C: z? matches it in zsh
 cat >"$tmp/home/.claude/hooks/no-isolation-repos" <<EOF
 # test list
 $tmp/opt-past until 2000-01-01
 $tmp/opt-future/ until 2999-12-31
 $tmp/outer/ex
+$tmp/opt-marker/lst
 EOF
+# HOMEs with no list file and with an empty one: the marker alone must carry the rules.
+mkdir -p "$tmp/home2" "$tmp/home3/.claude/hooks"
+: >"$tmp/home3/.claude/hooks/no-isolation-repos"
 export HOME=$tmp/home
 
 pass=0 fail=0
@@ -228,12 +280,12 @@ check "o6 not listed: guarded"               deny "$R1" "$(bash_json "" "$M" "gi
 # The list is also judged on each Bash target, as Write judges it on the file's dir: a
 # path into a listed main checkout counts as one outside any repo. Each other target
 # is judged as before, so one path into M still denies. The .claude/no-isolation marker
-# is judged on the cwd only.
+# counts the same way (mk* below).
 OF=$tmp/opt-future
 mkdir -p "$tmp/out"
 check "o7 cwd=M cd opt-future && rm f"       allow ""  "$(bash_json a1 "$M" "cd $OF && rm f")"
 check "o8 cwd=M git -C opt-future commit"    allow ""  "$(bash_json a1 "$M" "git -C $OF commit -m x")"
-check "o9 cwd=W echo > opt-marker/a"         deny "$R2" "$(bash_json a1 "$W_SIB" "echo x > $tmp/opt-marker/a")"
+check "o9 cwd=W echo > opt-marker/a"         allow ""  "$(bash_json a1 "$W_SIB" "echo x > $tmp/opt-marker/a")"
 check "o10 Write agent cwd=M opt-future/a"   allow ""  "$(write_json a1 "$M" "$OF/a")"
 check "o11 cwd=M cd opt-future && touch f"   allow ""  "$(bash_json a1 "$M" "cd $OF && touch f")"
 check "o12 cwd=M cd opt-future && git add f && commit" allow "" "$(bash_json a1 "$M" "cd $OF && git add f && git commit -m x")"
@@ -308,6 +360,221 @@ check "o60 cwd=W git -C M \$s -ffdx"       deny "$R2" "$(bash_json a1 "$W_SIB" "
 check "o61 cwd=W GIT_CONFIG_COUNT=1 git -C M x" deny "$U1" "$(bash_json a1 "$W_SIB" "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.x GIT_CONFIG_VALUE_0=clean git -C $M x -ffdx")"
 check "o62 cwd=W git -c color.ui=never -C opt-future add f" allow "" "$(bash_json a1 "$W_SIB" "git -c color.ui=never -C $OF add f")"
 check "o63 cwd=W git -C opt-future add f"   allow ""  "$(bash_json a1 "$W_SIB" "git -C $OF add f")"
+# The marker at a main checkout's top counts per target exactly as the list does.
+MK=$tmp/opt-marker
+mk() {  # mk <label> <want> <reason> <agent> <cwd> <command>, under each of the three HOMEs
+  local h
+  for h in home home2 home3; do HOME=$tmp/$h; check "$1 [$h]" "$2" "$3" "$(bash_json "$4" "$5" "$6")"; done
+  HOME=$tmp/home
+}
+mk "mk1 cwd=W git -C MK commit"                allow "" a1 "$W_SIB" "git -C $MK commit -m x"
+mk "mk2 cwd=W git -C MK add f"                 allow "" a1 "$W_SIB" "git -C $MK add f"
+mk "mk3 cwd=W echo > MK/a"                     allow "" a1 "$W_SIB" "echo x > $MK/a"
+mk "mk4 cwd=M git -C MK commit"                allow "" a1 "$M" "git -C $MK commit -m x"
+mk "mk5 cwd=M cd MK && git add f && commit"    allow "" a1 "$M" "cd $MK && git add f && git commit -m x"
+mk "mk6 cwd=M echo > MK/a"                     allow "" a1 "$M" "echo x > $MK/a"
+mk "mk7 cwd=out git -C MK commit"              allow "" a1 "$tmp/out" "git -C $MK commit -m x"
+mk "mk8 cwd=out cd MK && commit (no agent)"    allow "" "" "$tmp/out" "cd $MK && git commit -m x"
+mk "mk9 cwd=out echo > MK/a (no agent)"        allow "" "" "$tmp/out" "echo x > $MK/a"
+mk "mk10 cwd=W git -C MK commit -m heredoc"    allow "" a1 "$W_SIB" "git -C $MK commit -m $HM"
+mk "mk11 cwd=W touch MK/a M/a"                 deny "$R2" a1 "$W_SIB" "touch $MK/a $M/a"
+mk "mk12 cwd=M git -C MK commit && git commit" deny "$R2" a1 "$M" "git -C $MK commit -m x && git commit -m y"
+mk "mk13 cwd=W git -C MK clean -ffdx"          deny "$R2" a1 "$W_SIB" "git -C $MK clean -ffdx"
+mk "mk14 cwd=W git -C MK commit -m \"clean up\"" deny "$R2" a1 "$W_SIB" "git -C $MK commit -m \"clean up\""
+mk "mk15 cwd=W G=git; \$G -C MK commit"        deny "$R2" a1 "$W_SIB" "G=git; \$G -C $MK commit -m x"
+mk "mk16 cwd=W git -C MK submodule update"     deny "$R2" a1 "$W_SIB" "git -C $MK submodule update --init"
+mk "mk17 cwd=out x=M; cd MK && rm -rf \"\$x\"/f" deny "$U1" a1 "$tmp/out" "x=$M; cd $MK && rm -rf \"\$x\"/f"
+mk "mk18 same, no agent"                       deny "$R1" "" "$tmp/out" "x=$M; cd $MK && rm -rf \"\$x\"/f"
+mk "mk19 cwd=W echo > MK/inner/a (unmarked, nested)" deny "$R2" a1 "$W_SIB" "echo x > $MK/inner/a"
+mk "mk20 cwd=W echo > mko/mk/a (marked, in unmarked)" deny "$R2" a1 "$W_SIB" "echo x > $tmp/mko/mk/a"
+check "mk21 cwd=W echo > opt-future/mk/a (marked, in listed)" allow "" "$(bash_json a1 "$W_SIB" "echo x > $OF/mk/a")"
+check "mk22 cwd=W echo > MK/lst/a (listed, in marked)" allow "" "$(bash_json a1 "$W_SIB" "echo x > $MK/lst/a")"
+HOME=$tmp/home2
+check "mk23 [home2] cwd=W echo > MK/lst/a (unlisted, in marked)" deny "$R2" "$(bash_json a1 "$W_SIB" "echo x > $MK/lst/a")"
+HOME=$tmp/home
+mk "mk24 cwd=W rm -rf MK/sub"                  allow "" a1 "$W_SIB" "rm -rf $MK/sub"
+mk "mk25 cwd=W rm -rf MK"                      deny "$R2" a1 "$W_SIB" "rm -rf $MK"
+mk "mk26 cwd=M cd MK && rm -rf .."             deny "$R2" a1 "$M" "cd $MK && rm -rf .."
+mk "mk27 cwd=M git -C MK commit (no agent)"    deny "$R1" "" "$M" "git -C $MK commit -m x"
+mk "mk28 cwd=M echo > MK/a (no agent)"         allow "" "" "$M" "echo x > $MK/a"
+mk "mk29 cwd=W echo > dirmk/a (marker is a dir)" deny "$R2" a1 "$W_SIB" "echo x > $tmp/dirmk/a"
+mk "mk30 cwd=W echo > deep/a (marker below top)" deny "$R2" a1 "$W_SIB" "echo x > $tmp/deep/a"
+# Only a main checkout's top counts, as a target and for the cwd. A marker in a linked
+# worktree alone opts nothing out (HEAD opted out that cwd); a cwd in a worktree of a
+# marked main counts by the main (cmw: committed, so in both; omw: in the main only).
+mk "mk31 cwd=W echo > mw/a (marker only in mww)" deny "$R2" a1 "$W_SIB" "echo x > $tmp/mw/a"
+mk "mk32 cwd=W echo > mww/a"                   allow "" a1 "$W_SIB" "echo x > $tmp/mww/a"
+mk "mk33 cwd=mww echo > M/a (marker only in mww)" deny "$R2" a1 "$tmp/mww" "echo x > $M/a"
+mk "mk37 cwd=mww git commit (no agent)"        deny "$R1" "" "$tmp/mww" "git commit -m x"
+mk "mk38 cwd=cmw touch M/a (committed marker)"  allow "" a1 "$tmp/cmw" "touch $M/a"
+mk "mk39 cwd=cmw git commit (no agent)"        allow "" "" "$tmp/cmw" "git commit -m x"
+mk "mk40 cwd=omw touch M/a (marker in main only)" allow "" a1 "$tmp/omw" "touch $M/a"
+mk "mk41 cwd=omw git commit (no agent)"        allow "" "" "$tmp/omw" "git commit -m x"
+mk "mk42 cwd=W echo > cm/a"                    allow "" a1 "$W_SIB" "echo x > $tmp/cm/a"
+# No main top to find from a bare or separate-git-dir worktree: no marker counts for that
+# cwd, not beside the git dir and not at the worktree's own top (HEAD let the latter
+# opt out the cwd: bw2 and sg2 flip to deny). The main of sg counts, as cwd and target.
+mk "bw1 cwd=bare/wt1 touch M/a"                deny "$R2" a1 "$tmp/bare/wt1" "touch $M/a"
+mk "bw2 cwd=bare/wt1 touch wt1/a (no agent)"   deny "$R1" "" "$tmp/bare/wt1" "touch $tmp/bare/wt1/a"
+mk "bw3 cwd=bare/wt1 rm -rf bare (marked dir)" deny "$R2" a1 "$tmp/bare/wt1" "rm -rf $tmp/bare"
+mk "bw4 cwd=bare/wt1 touch wt1/a"              allow "" a1 "$tmp/bare/wt1" "touch $tmp/bare/wt1/a"
+mk "sg1 cwd=sgw touch M/a"                     deny "$R2" a1 "$tmp/sgw" "touch $M/a"
+mk "sg2 cwd=sgw touch sgw/a (no agent)"        deny "$R1" "" "$tmp/sgw" "touch $tmp/sgw/a"
+mk "sg3 cwd=sg git commit (no agent)"          allow "" "" "$tmp/sg" "git commit -m x"
+mk "sg4 cwd=W touch sg/a"                      allow "" a1 "$W_SIB" "touch $tmp/sg/a"
+mk "sg5 cwd=sgw touch sg/a"                    allow "" a1 "$tmp/sgw" "touch $tmp/sg/a"
+mk "sg6 cwd=sgw rm -rf sep (marked dir)"       deny "$R2" a1 "$tmp/sgw" "rm -rf $tmp/sep"
+# The marker's entry must be named exactly: no-iſolation and NO-ISOLATION do not count.
+mk "fd1 cwd=W echo > fold1/a (U+017F)"         deny "$R2" a1 "$W_SIB" "echo x > $tmp/fold1/a"
+mk "fd2 cwd=fold1 git commit (no agent)"       deny "$R1" "" "$tmp/fold1" "git commit -m x"
+mk "fd3 cwd=W echo > fold2/a (upper case)"     deny "$R2" a1 "$W_SIB" "echo x > $tmp/fold2/a"
+mk "fd4 cwd=fold2 git commit (no agent)"       deny "$R1" "" "$tmp/fold2" "git commit -m x"
+# Symlinks: a relative ln -s target is read from the link's dir, and a write through an
+# existing link to a file is judged at its target. MK and OF (listed) alike.
+mk "ln1 cwd=W cd o2/d && ln -s ../main/f MK/l2 && echo > MK/l2" deny "$R2" a1 "$W_SIB" "cd $tmp/o2/d && ln -s ../main/f $MK/l2 && echo pwn > $MK/l2"
+mk "ln2 cwd=o2/d ln -s ../main/f MK/l2"        deny "$R2" a1 "$tmp/o2/d" "ln -s ../main/f $MK/l2"
+mk "ln3 cwd=W echo > MK/lf (link into M)"      deny "$R2" a1 "$W_SIB" "echo pwn > $MK/lf"
+mk "ln4 cwd=W cd o2/d && ln -s ../main/f OF/l2" deny "$R2" a1 "$W_SIB" "cd $tmp/o2/d && ln -s ../main/f $tmp/opt-future/l2"
+mk "ln5 cwd=W echo > OF/lf (link into M)"      deny "$R2" a1 "$W_SIB" "echo pwn > $tmp/opt-future/lf"
+mk "ln6 cwd=W ln -s ../../main/f MK/sub/"      deny "$R2" a1 "$W_SIB" "ln -s ../../main/f $MK/sub/"
+mk "ln7 cwd=W cd o2/d && ln -s -t MK ../main/f" deny "$R2" a1 "$W_SIB" "cd $tmp/o2/d && ln -s -t $MK ../main/f"
+mk "ln8 cwd=W opaque: ln -s ..\\/main/f MK/l2" deny "$R2" a1 "$W_SIB" "cd $tmp/o2/d && ln -s ..\\/main/f $MK/l2"
+mk "ln9 cwd=W echo > MK/sub/lf1 (two hops)"    deny "$R2" a1 "$W_SIB" "echo pwn > $MK/sub/lf1"
+mk "ln10 cwd=W cd o2/d && ln -s .. && echo (no agent)" deny "$R1" "" "$W_SIB" "cd $tmp/o2/d && ln -s ../main/f $MK/l2 && echo pwn > $MK/l2"
+mk "ln11 cwd=W ln -s sub/a MK/l2"              allow "" a1 "$W_SIB" "ln -s sub/a $MK/l2"
+mk "ln12 cwd=W cd MK && ln -s ../opt-marker/sub l3" allow "" a1 "$W_SIB" "cd $MK && ln -s ../opt-marker/sub l3"
+mk "ln13 cwd=W echo > MK/ls/a (dir link within)" allow "" a1 "$W_SIB" "echo x > $MK/ls/a"
+mk "ln14 cwd=W ln -s ../x MK/sub/l2 (in MK)"   allow "" a1 "$W_SIB" "ln -s ../x $MK/sub/l2"
+check "ln15 Write agent cwd=W MK/lf (link into M)" deny "$R2" "$(write_json a1 "$W_SIB" "$MK/lf")"
+# rm, mv, ln's names and chmod -h act on the link itself: not followed.
+mk "ln16 cwd=W rm MK/lf"                       allow "" a1 "$W_SIB" "rm $MK/lf"
+mk "ln17 cwd=W rm W/lw (own link into M)"      allow "" a1 "$W_SIB" "rm $W_SIB/lw"
+mk "ln18 cwd=W mv W/lw W/lw2; unlink W/lw"     allow "" a1 "$W_SIB" "mv $W_SIB/lw $W_SIB/lw2; unlink $W_SIB/lw"
+mk "ln19 cwd=W chmod -h 600 W/lw"              allow "" a1 "$W_SIB" "chmod -h 600 $W_SIB/lw"
+mk "ln20 cwd=W ln -sf x W/lw"                  allow "" a1 "$W_SIB" "ln -sf x $W_SIB/lw"
+# Writers go through a link: redirect, tee, cp's destination, chmod without -h, Write.
+mk "ln21 cwd=W echo > W/lw"                    deny "$R2" a1 "$W_SIB" "echo pwn > $W_SIB/lw"
+mk "ln22 cwd=W echo | tee W/lw"                deny "$R2" a1 "$W_SIB" "echo pwn | tee $W_SIB/lw"
+mk "ln23 cwd=W cp W/qf W/lw"                   deny "$R2" a1 "$W_SIB" "cp $W_SIB/qf $W_SIB/lw"
+mk "ln24 cwd=W chmod 600 W/lw"                 deny "$R2" a1 "$W_SIB" "chmod 600 $W_SIB/lw"
+check "ln25 Write agent cwd=W W/lw"            deny "$R2" "$(write_json a1 "$W_SIB" "$W_SIB/lw")"
+# Chains: 10, 31 and 33 links; Write through 10; the legit chain in W; 260 links.
+mk "ln26 cwd=W echo > MK/c1 (10 links)"        deny "$R2" a1 "$W_SIB" "echo pwn > $MK/c1"
+check "ln27 Write agent cwd=W MK/c1 (10 links)" deny "$R2" "$(write_json a1 "$W_SIB" "$MK/c1")"
+mk "ln28 cwd=W echo > MK/hc/h1 (31 links)"     deny "$R2" a1 "$W_SIB" "echo pwn > $MK/hc/h1"
+mk "ln29 cwd=W echo > MK/hc/k1 (33 links)"     deny "$R2" a1 "$W_SIB" "echo pwn > $MK/hc/k1"
+mk "ln30 cwd=W echo > W/q1 (legit chain)"      allow "" a1 "$W_SIB" "echo x > $W_SIB/q1"
+mk "ln31 cwd=W echo > MK/lf (dangling into M)" deny "$R2" a1 "$W_SIB" "echo x > $MK/lf"
+c="touch"; for i in $(seq 1 260); do c="$c $tmp/many2/l$i"; done
+check "ln32 cwd=W touch 260 links (too many)"  deny "長すぎて" "$(bash_json a1 "$W_SIB" "$c")"
+# A glob is never expanded: a globbed path gets no opt-out, so it is judged as if MK and
+# OF were not exempt. W and dirs outside any repo keep HEAD's verdicts.
+mk "gl1 cwd=W echo > MK/l?"                    deny "$R2" a1 "$W_SIB" "echo pwn > $MK/l?"
+mk "gl2 cwd=W echo > MK/[l]f"                  deny "$R2" a1 "$W_SIB" "echo pwn > $MK/[l]f"
+mk "gl3 cwd=W echo | tee MK/l?"                deny "$R2" a1 "$W_SIB" "echo pwn | tee $MK/l?"
+mk "gl4 cwd=W cp out/q/lf MK/l?"               deny "$R2" a1 "$W_SIB" "cp $tmp/out/q/lf $MK/l?"
+mk "gl5 cwd=W cd MK && echo > l?"              deny "$R2" a1 "$W_SIB" "cd $MK && echo pwn > l?"
+check "gl6 cwd=W echo > OF/l? (listed)"        deny "$R2" "$(bash_json a1 "$W_SIB" "echo pwn > $OF/l?")"
+mk "gl7 cwd=W echo > W/l? (own link, known hole as on HEAD)" allow "" a1 "$W_SIB" "echo pwn > $W_SIB/l?"
+mk "gl8 cwd=W touch MK/g/l*/vendor"            deny "$R2" a1 "$W_SIB" "touch $MK/g/l*/vendor"
+mk "gl9 cwd=W rm -rf MK/g/l*/vendor"           deny "$R2" a1 "$W_SIB" "rm -rf $MK/g/l*/vendor"
+mk "gl10 cwd=W echo > W/q? (legit chain)"      allow "" a1 "$W_SIB" "echo x > $W_SIB/q?"
+mk "gl11 cwd=W rm MK/sub/l? (no opt-out)"      deny "$R2" a1 "$W_SIB" "rm $MK/sub/l?"
+mk "gl12 cwd=W echo > MK/n?ne (no opt-out)"    deny "$R2" a1 "$W_SIB" "echo x > $MK/n?ne"
+mk "gl13 cwd=W echo > W/*.log"                 allow "" a1 "$W_SIB" "echo x > $W_SIB/*.log"
+mk "gl14 cwd=W touch out/big/*/*/* (no repo)"  allow "" a1 "$W_SIB" "touch $tmp/out/big/*/*/*"
+mk "gl15 cwd=W echo > MK/a~ (~ past start)"    deny "$R2" a1 "$W_SIB" "echo x > $MK/a~"
+mk "gl16 cwd=W echo > MK/a (literal)"          allow "" a1 "$W_SIB" "echo x > $MK/a"
+# The shell's locale: zé is one character in UTF-8, so z? and z[!x] match it in zsh.
+mk "gl17 cwd=W echo > MK/z?"                   deny "$R2" a1 "$W_SIB" "echo pwn > $MK/z?"
+mk "gl18 cwd=W echo > MK/z[!x]"                deny "$R2" a1 "$W_SIB" "echo pwn > $MK/z[!x]"
+mk "gl19 cwd=W tee MK/z?"                      deny "$R2" a1 "$W_SIB" "echo pwn | tee $MK/z?"
+mk "gl20 cwd=W cp out/q/lf MK/z?"              deny "$R2" a1 "$W_SIB" "cp $tmp/out/q/lf $MK/z?"
+# zsh patterns: ** (kept in the word), and (a|b), <-> , <1-9> (split by the lexer: NXC).
+mk "gl21 cwd=W echo > MK/**/lf"                deny "$R2" a1 "$W_SIB" "echo pwn > $MK/**/lf"
+mk "gl22 cwd=W echo > MK/l(f|x)"               deny "$R2" a1 "$W_SIB" "echo pwn > $MK/l(f|x)"
+mk "gl23 cwd=W echo > MK/(lf|zz)"              deny "$R2" a1 "$W_SIB" "echo pwn > $MK/(lf|zz)"
+mk "gl24 cwd=W echo > MK/l<->"                 deny "$R2" a1 "$W_SIB" "echo pwn > $MK/l<->"
+mk "gl25 cwd=W echo > MK/l<1-9>"               deny "$R2" a1 "$W_SIB" "echo pwn > $MK/l<1-9>"
+mk "gl26 cwd=W tee MK/l(f|x)"                  deny "$R2" a1 "$W_SIB" "echo pwn | tee $MK/l(f|x)"
+mk "gl27 cwd=W cp out/q/lf MK/l<->"            deny "$R2" a1 "$W_SIB" "cp $tmp/out/q/lf $MK/l<->"
+mk "gl28 cwd=W cd MK && echo > l(f|x)"         deny "$R2" a1 "$W_SIB" "cd $MK && echo pwn > l(f|x)"
+mk "gl29 cwd=W cd MK && echo > **/lf"          deny "$R2" a1 "$W_SIB" "cd $MK && echo pwn > **/lf"
+mk "gl32 cwd=W cd MK && echo > (lf|x)"         deny "$R2" a1 "$W_SIB" "cd $MK && echo pwn > (lf|x)"
+mk "gl33 cwd=W cd MK && tee (lf|x)"            deny "$R2" a1 "$W_SIB" "cd $MK && echo pwn | tee (lf|x)"
+mk "gl34 cwd=W true && (echo x > MK/a)"        allow "" a1 "$W_SIB" "true && (echo x > $MK/a)"
+# Not zsh patterns: \$( ), a leading subshell, an array.
+mk "gl30 cwd=W echo \$(date) > MK/a"           allow "" a1 "$W_SIB" "echo \$(date) > $MK/a"
+mk "gl31 cwd=W (echo x > MK/a)"                allow "" a1 "$W_SIB" "(echo x > $MK/a)"
+# cp into a directory writes <dir>/<name>, through a link of that name.
+mk "cd1 cwd=W cp out/q/lf MK/"                 deny "$R2" a1 "$W_SIB" "cp $tmp/out/q/lf $MK/"
+mk "cd2 cwd=W cp out/q/lf MK"                  deny "$R2" a1 "$W_SIB" "cp $tmp/out/q/lf $MK"
+mk "cd3 cwd=W cd MK && cp out/q/lf ."          deny "$R2" a1 "$W_SIB" "cd $MK && cp $tmp/out/q/lf ."
+mk "cd4 cwd=W cp out/q/* MK/ (glob source)"    deny "$R2" a1 "$W_SIB" "cp $tmp/out/q/* $MK/"
+mk "cd5 cwd=W cp out/q/ok W/ (W has no ok)"    allow "" a1 "$W_SIB" "cp $tmp/out/q/ok $W_SIB/"
+mk "cd6 cwd=W cp out/q/lf out/q/ok MK/sub/"    allow "" a1 "$W_SIB" "cp $tmp/out/q/lf $tmp/out/q/ok $MK/sub/"
+mk "cd7 cwd=W mv out/q/lf MK/sub/lf0 (replaces link)" allow "" a1 "$W_SIB" "mv $tmp/out/q/lf $MK/sub/lf0"
+mk "cd8 cwd=W cp -R out/q/lf MK/ (no write through)" allow "" a1 "$W_SIB" "cp -R $tmp/out/q/lf $MK/"
+# A hard link is made to what a source link points to.
+mk "hl1 cwd=W ln out/zz W/h"                   deny "$R2" a1 "$W_SIB" "ln $tmp/out/zz $W_SIB/h"
+mk "hl2 cwd=W ln MK/lf W/h"                    deny "$R2" a1 "$W_SIB" "ln $MK/lf $W_SIB/h"
+mk "hl3 cwd=W ln MK/lf (into the cwd)"         deny "$R2" a1 "$W_SIB" "ln $MK/lf"
+mk "hl4 cwd=W ln -s MK/lf W/h (symbolic)"      allow "" a1 "$W_SIB" "ln -s $MK/lf $W_SIB/h"
+mk "hl5 cwd=W ln W/qf W/h (legit)"             allow "" a1 "$W_SIB" "ln $W_SIB/qf $W_SIB/h"
+mk "hl6 cwd=W ln W/q1 W/h (legit chain)"       allow "" a1 "$W_SIB" "ln $W_SIB/q1 $W_SIB/h"
+# readlink -f gives up on a loop and hands back a link: refused. A dangling last hop
+# within W (readlink exits 1 there too) is let through.
+mk "rl1 cwd=W echo > MK/g/la (loop)"           deny "$U1" a1 "$W_SIB" "echo pwn > $MK/g/la"
+check "rl2 cwd=M echo > MK/g/la (loop, no agent)" deny "$R1" "$(bash_json "" "$M" "echo pwn > $MK/g/la")"
+mk "rl3 cwd=W echo > W/ldang (dangling in W)"  allow "" a1 "$W_SIB" "echo x > $W_SIB/ldang"
+# A marker made through a path the hook does not follow. In a repo the variable leaves
+# the target unresolved (R2U / R1); from outside every repo it passes, as on HEAD.
+mk "mk34 cwd=W f=..; touch .claude/\${f}.."    deny "$U1" a1 "$W_SIB" "f=no-iso; touch .claude/\${f}lation"
+mk "mk35 cwd=M f=..; touch M/.claude/\${f}.. (no agent)" deny "$R1" "" "$M" "f=no-iso; touch $M/.claude/\${f}lation"
+mk "mk36 cwd=out f=..; touch M/.claude/\${f}.. (known hole)" allow "" a1 "$tmp/out" "f=no-iso; touch $M/.claude/\${f}lation"
+# APFS ignores case, so SELF does too: any letter case of either name, Bash and Edit/Write.
+SELF=ユーザーだけが編集
+edit_json() {  # <agent|""> <cwd> <file_path>
+  jq -n --arg a "$1" --arg c "$2" --arg p "$3" \
+    '{tool_name:"Edit",cwd:$c,tool_input:{file_path:$p,old_string:"a",new_string:"b"}} + (if $a == "" then {} else {agent_id:$a} end)'
+}
+check "sc1 cwd=W touch W/.claude/NO-ISOLATION"   deny "$SELF" "$(bash_json a1 "$W_SIB" "mkdir -p $W_SIB/.claude && touch $W_SIB/.claude/NO-ISOLATION")"
+check "sc2 cwd=W touch .claude/No-Isolation"     deny "$SELF" "$(bash_json a1 "$W_SIB" "touch .claude/No-Isolation")"
+check "sc3 cwd=M touch M/.Claude/NO-ISOLATION"   deny "$SELF" "$(bash_json a1 "$M" "touch $M/.Claude/NO-ISOLATION")"
+check "sc4 cwd=M touch .claude/No-Isolation (no agent)" deny "$SELF" "$(bash_json "" "$M" "touch .claude/No-Isolation")"
+check "sc5 Write agent W/.claude/NO-ISOLATION"   deny "$SELF" "$(write_json a1 "$W_SIB" "$W_SIB/.claude/NO-ISOLATION")"
+check "sc6 Edit agent W/.CLAUDE/No-Isolation"    deny "$SELF" "$(edit_json a1 "$W_SIB" "$W_SIB/.CLAUDE/No-Isolation")"
+check "sc7 Write cwd=M M/.claude/No-Isolation (no agent)" deny "$SELF" "$(write_json "" "$M" "$M/.claude/No-Isolation")"
+check "sc8 Edit cwd=M .claude/NO-ISOLATION (no agent)" deny "$SELF" "$(edit_json "" "$M" ".claude/NO-ISOLATION")"
+check "sc9 Write ~/.claude/hooks/No-Isolation-Repos" deny "$SELF" "$(write_json a1 "$W_SIB" "$HOME/.claude/hooks/No-Isolation-Repos")"
+check "sc10 echo >> ~/.claude/hooks/NO-ISOLATION-REPOS" deny "$SELF" "$(bash_json a1 "$tmp/out" "echo x >> ~/.claude/hooks/NO-ISOLATION-REPOS")"
+check "sc11 cat .claude/NO-ISOLATION (read)"     allow ""  "$(bash_json a1 "$W_SIB" "cat .claude/NO-ISOLATION")"
+# A marker counts only as a regular file in a real .claude dir, neither a symlink.
+mk "sl1 cwd=W echo > sl1/a (.claude symlinked out)" deny "$R2" a1 "$W_SIB" "echo x > $tmp/sl1/a"
+mk "sl2 cwd=W echo > sl2/a (marker symlinked out)" deny "$R2" a1 "$W_SIB" "echo x > $tmp/sl2/a"
+check "sl3 cwd=sl1 touch M/a"                    deny "$R2" "$(bash_json a1 "$tmp/sl1" "touch $M/a")"
+check "sl4 cwd=sl2 touch M/a"                    deny "$R2" "$(bash_json a1 "$tmp/sl2" "touch $M/a")"
+check "sl5 cwd=sl1 git commit (no agent)"        deny "$R1" "$(bash_json "" "$tmp/sl1" "git commit -m x")"
+check "sl6 cwd=sl2 git commit (no agent)"        deny "$R1" "$(bash_json "" "$tmp/sl2" "git commit -m x")"
+check "sl7 Write cwd=sl1 sl1/a (no agent)"       deny "$R1" "$(write_json "" "$tmp/sl1" "$tmp/sl1/a")"
+# The .claude dir holding a main checkout's marker is the user's: removing, moving or
+# copying it is SELF. Other files under it are judged as before.
+mk "sd1 cwd=W rm -rf MK/.claude"                 deny "$SELF" a1 "$W_SIB" "rm -rf $MK/.claude"
+mk "sd2 cwd=W mv MK/.claude MK/c2"               deny "$SELF" a1 "$W_SIB" "mv $MK/.claude $MK/c2"
+mk "sd3 cwd=M mv MK/c2 MK/.claude (back)"        deny "$SELF" a1 "$M" "mv $MK/c2 $MK/.claude"
+mk "sd4 cwd=W rm -rf MK/.CLAUDE"                 deny "$SELF" a1 "$W_SIB" "rm -rf $MK/.CLAUDE"
+mk "sd5 cwd=W cp -r MK/.claude ."                deny "$SELF" a1 "$W_SIB" "cp -r $MK/.claude ."
+mk "sd6 cwd=W rm -rf MK/.claude/*"               deny "$SELF" a1 "$W_SIB" "rm -rf $MK/.claude/*"
+mk "sd7 cwd=out x=\$y; rm -rf MK/.claude (opaque)" deny "$SELF" a1 "$tmp/out" "x=\$y; rm -rf $MK/.claude"
+mk "sd8 cwd=W echo > MK/.claude/settings.json"   allow "" a1 "$W_SIB" "echo x > $MK/.claude/settings.json"
+mk "sd9 cwd=W rm MK/.claude/settings.json"       allow "" a1 "$W_SIB" "rm $MK/.claude/settings.json"
+check "sd10 Edit agent cwd=W MK/.claude/settings.json" allow "" "$(edit_json a1 "$W_SIB" "$MK/.claude/settings.json")"
+check "sd11 cwd=W rm -rf M/.claude (unmarked: R2)" deny "$R2" "$(bash_json a1 "$W_SIB" "rm -rf $M/.claude")"
+check "sd12 cwd=W rm -rf OPT-MARKER (other case)" deny "$R2" "$(bash_json a1 "$W_SIB" "rm -rf $tmp/OPT-MARKER")"
+# Copying the marker into a linked worktree writes only there, so it passes; the copy
+# opts nothing out, since a marker in a worktree alone does not count (mk33, mk31).
+check "sd13 cwd=W tar -C MK -c .claude | tar -x" allow "" "$(bash_json a1 "$W_SIB" "tar -C $MK -cf - .claude | tar -xf - -C $W_SIB")"
+check "sd14 cwd=W cp -r MK/. W/"                 allow ""  "$(bash_json a1 "$W_SIB" "cp -r $MK/. $W_SIB/")"
 # Rule 1 (no agent) denies everything the original did, cwd-relative, cd ignored.
 check "r1a cwd=M git -C /tmp commit (no agent)" deny "$R1" "$(bash_json "" "$M" "git -C /tmp commit -m x")"
 check "r1b cwd=M cd /tmp && rm a (no agent)" deny "$R1" "$(bash_json "" "$M" "cd /tmp && rm a")"
@@ -408,11 +675,11 @@ check "so2 Write W/.claude/no-isolation"         deny "$SELF" "$(write_json a1 "
 check "so3 echo >> no-isolation-repos (no agent)" deny "$SELF" "$(bash_json "" /tmp "echo $W >> ~/.claude/hooks/no-isolation-repos")"
 check "so4 Write no-isolation-repos (no agent)"  deny "$SELF" "$(write_json "" /tmp "$HOME/.claude/hooks/no-isolation-repos")"
 check "so5 cat no-isolation-repos"               allow ""  "$(bash_json a1 "$W" "cat ~/.claude/hooks/no-isolation-repos")"
-# Known limits, kept on purpose: the opt-out is judged on the cwd only, so from an
-# opted-out repo a write into M passes; a linked worktree nested in M is not main;
+# Known limits, kept on purpose: an opted-out cwd lets every command through, so from an
+# opted-out repo (or a worktree of one) a write into M passes; a linked worktree nested in M is not main;
 # git update-ref / config core.hooksPath / config --worktree core.worktree run from W
-# are not judged; a symlink made beforehand (ln -s .. l && rm -rf l/main) and writers
-# not listed (gzip, sort -o, ditto, prettier --write, python3 -c) are not followed.
+# are not judged; a symlink made in the same command and used as a dir (ln -s .. l &&
+# rm -rf l/main), a hard link made by an unlisted writer, and writers not listed (gzip, sort -o, ditto, prettier --write, python3 -c) are not followed.
 check "k1 cwd=opted-out repo rm -rf M/a"         allow ""  "$(bash_json a1 "$tmp/opt-future" "rm -rf $M/a")"
 # Without jq the hook still denies, by printf.
 mkdir -p "$tmp/nojq"
@@ -455,6 +722,21 @@ c="cd $OF"; i=0; while [ ${#c} -lt 15900 ]; do i=$((i+1)); c="$c && touch d$((i%
 timed "b3 cwd=M cd opt-future && touch x ~1000 in 60 dirs" allow "$(bash_json a1 "$M" "$c")"
 c="rm -rf"; i=0; while [ ${#c} -lt 15900 ]; do i=$((i+1)); c="$c $OF/d$((i%60+1))/x$i"; done
 timed "b4 cwd=M rm -rf ~400 paths in opt-future" allow "$(bash_json a1 "$M" "$c")"
+# The same into a marked repo, with no list file at all.
+for i in $(seq 1 60); do mkdir -p "$MK/d$i"; done
+HOME=$tmp/home2
+c="cd $MK"; i=0; while [ ${#c} -lt 15900 ]; do i=$((i+1)); c="$c && touch d$((i%60+1))/x$i"; done
+timed "b5 [home2] cwd=M cd opt-marker && touch x ~1000 in 60 dirs" allow "$(bash_json a1 "$M" "$c")"
+c="rm -rf"; i=0; while [ ${#c} -lt 15900 ]; do i=$((i+1)); c="$c $MK/d$((i%60+1))/x$i"; done
+timed "b6 [home2] cwd=M rm -rf ~400 paths in opt-marker" allow "$(bash_json a1 "$M" "$c")"
+# Relative names keep these under the 16K cap, so the link handling is what is timed.
+c="echo pwn > $M/f"; for i in $(seq 1 200); do c="$c; touch q1"; done
+timed "b7 [home2] cwd=W echo > M/f; touch W/q1 (9 links) x200" deny "$(bash_json a1 "$W_SIB" "$c")"
+c="touch"; for i in $(seq 1 200); do c="$c q$((i%9+1))"; done
+timed "b8 [home2] cwd=W touch q1..q9 x200 (legit chain)" allow "$(bash_json a1 "$W_SIB" "$c")"
+# A quoted deep pattern is not expanded (round 6 took 11-67 s on one): judged at once.
+timed "b9 [home2] cwd=W touch '/*/*/*/*/*/*/*/zz'; echo > MK/lf" deny "$(bash_json a1 "$W_SIB" "touch '/*/*/*/*/*/*/*/zz'; echo pwn > $MK0/lf")"
+HOME=$tmp/home
 # Round 2, B: cd - plus a dozen cd targets, then eval and a long cd . run.
 for i in $(seq 1 14); do mkdir -p "$tmp/d$i"; done
 c="cd -"; for i in $(seq 1 14); do c="$c; cd $tmp/d$i"; done; c="$c; eval :"
