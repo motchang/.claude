@@ -25,13 +25,13 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Edit|Write|NotebookEdit|Bash",
+        "matcher": "Edit|Write|NotebookEdit",
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/hooks/enforce-agent-worktree.sh\"",
+            "command": "bash \"$HOME/.claude/hooks/guard-main-checkout.sh\"",
             "timeout": 10,
-            "statusMessage": "agent/worktree ガード確認中"
+            "statusMessage": "メインチェックアウトへの書き込みを確認中"
           }
         ]
       }
@@ -110,7 +110,9 @@
       "autoCompactWindow": "auto"
     },
     "claude-opus-4-8": {},
-    "claude-fable-5-2": {}
+    "claude-fable-5-2": {
+      "effortLevel": "xhigh"
+    }
   },
   "advisorModel": "fable",
   "tui": "fullscreen",

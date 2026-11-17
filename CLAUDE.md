@@ -10,7 +10,13 @@
 
 - **ファイルの変更全般** — 作成・編集・削除、リファクタリング、依存の追加や更新、
   コミット。`Agent(subagent_type: "general-purpose", isolation: "worktree")` で
-  起動する。worktree の中でしか書けないので `isolation` は省略しない。
+  起動する。メインチェックアウトへの書き込みはサブエージェントからでもフックが
+  止めるので、`isolation` は省略しない。Bash でもメインチェックアウトのファイルを
+  書き換えない。
+  - `isolation: "worktree"` が作るのは、セッションを起動したリポジトリの worktree。
+    書き込み先が別のリポジトリなら、サブエージェントにそのリポジトリの linked worktree を
+    `git -C <repo> worktree add <repo>/.claude/worktrees/<名前>` で作らせ、その中で編集させる。
+    gitignore された `.claude/worktrees/` の下に worktree を作るのは、ここでいう書き換えに当たらない。
 - **コードレビュー** — 書いた側と読む側を分けたいので、実装したエージェントとは
   別のエージェントに渡す。読むだけなので `isolation` は不要。
 
@@ -33,23 +39,17 @@
 
 エージェントの最終報告はユーザーに表示されない。必要なことは自分の言葉で伝え直す。
 
-## フックが強制している範囲
+## 直接編集してよいリポジトリ
 
-`hooks/enforce-agent-worktree.sh` が PreToolUse で deny する。git 管理下のパスに
-だけ効き、`~/.claude/hooks/no-isolation-repos` に載っているリポジトリと、
-`.claude/no-isolation` を置いたリポジトリは対象外（そこでは直接編集してよい）。
-リストに載っているかと `.claude/no-isolation` を置いたかは、どちらも Edit / Write では
-書き込むファイルのディレクトリで、Bash では cwd と書き込み先のパスごとに判定する。
-書き込み先を glob で書いた Bash コマンドでは、どちらの除外も使わない。
+マーカー `.claude/no-isolation` を直下に置いたリポジトリと、
+`~/.claude/hooks/no-isolation-repos` に載っているリポジトリでは、
+メインスレッドが直接編集してよい。マーカーと除外リストを書き換えるのはユーザーだけ。
 
-- **Edit / Write / NotebookEdit** — 常に。サブエージェント かつ worktree 内が条件。
-- **Bash** — リポジトリ内のファイルを実際に書き換えるコマンドだけ。読み取り・検索・
-  ビルド・テストは通る。リポジトリ外への書き込み（`/tmp` など）も通る。
-  ただし、git の設定を差し込む形（`-c alias.*` / `-c include.*`、`GIT_CONFIG*=`、
-  変数で書いた git サブコマンド）は、読み取りでも止まる。
+## フック
 
-レビューの委譲はフックでは強制できない。読み取りだけで deny が発火しないので、
-上の方針として守る。
+`hooks/guard-main-checkout.sh` が、`~/src` 以下のメインチェックアウトへの
+Edit / Write / NotebookEdit を止める。どの書き込みを通すかは、フックの冒頭の
+コメントと README に書いてある。
 
 deny されたときに `CLAUDE_ENFORCE_OFF=1` を自分で設定して回避しない。
 本当に直接やる必要があるなら、その旨をユーザーに説明して判断を仰ぐ。
