@@ -2,6 +2,17 @@
   "permissions": {
     "allow": [
       "Bash(herdr-browser:*)"
+    ],
+    "deny": [
+      "Read(~/.ssh/id_*)",
+      "Read(~/.aws/credentials)",
+      "Read(~/.config/gh/hosts.yml)",
+      "Read(~/.gnupg/**)",
+      "Read(~/.netrc)",
+      "Read(//**/.env)",
+      "Read(//**/.env.local)",
+      "Read(//**/.env.*.local)",
+      "Read(//**/.env.production)"
     ]
   },
   "model": "opus",

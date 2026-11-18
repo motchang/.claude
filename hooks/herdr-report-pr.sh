@@ -64,6 +64,9 @@ scan() {
 }
 
 (
+  # mktemp, not a name built from $$: under a shared /tmp another user could plant
+  # a symlink at a predictable name and have this write through it.
+  tmp=$(mktemp "${TMPDIR:-/tmp}/herdr-report-pr.XXXXXX") || exit 0
   {
     if [ -r "$transcript" ]; then
       scan "$transcript" true
@@ -101,10 +104,10 @@ scan() {
       }
       if (total > 2) out = out " +" (total - 2)
       print out
-    }' > "${TMPDIR:-/tmp}/herdr-report-pr.$$"
+    }' > "$tmp"
 
-  pr=$(cat "${TMPDIR:-/tmp}/herdr-report-pr.$$" 2>/dev/null)
-  command rm -f "${TMPDIR:-/tmp}/herdr-report-pr.$$"
+  pr=$(cat "$tmp" 2>/dev/null)
+  command rm -f "$tmp"
 
   if [ -n "$pr" ]; then
     herdr pane report-metadata "$pane" --source claude-pr --token "pr=${pr}"
