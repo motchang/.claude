@@ -127,6 +127,15 @@ Hook commands are written `bash "$HOME/.claude/hooks/..."`, never as absolute pa
 The command string is passed to a shell, so `$HOME` expands when the hook runs, and an
 absolute path would carry this machine's account name into a public repository.
 
+`permissions.deny` keeps the Read tool (and Grep and Glob, which honour the same
+rules) away from private keys, cloud and GitHub credentials, and `.env` files that
+usually hold real secrets. The `.env` rules start with `//` so that they match from
+the filesystem root: a bare `**/.env` would be resolved against the session's working
+directory and miss a `.env` in any other repository. `.env.example` and similar
+templates stay readable. A deny
+rule binds those tools only: `cat` through Bash is not stopped by it, so this is a
+guard against Claude pulling a secret into the transcript by accident, not a wall.
+
 Two things rewrite parts of this file on their own, and both write absolute paths when
 they do:
 
